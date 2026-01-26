@@ -1,0 +1,82 @@
+# llama.cpp with Vulkan backend
+# Best for prompt processing performance on Strix Halo
+
+ARG FEDORA_VERSION=43
+FROM fedora:${FEDORA_VERSION}
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp Vulkan build for Strix Halo ablation"
+LABEL backend="vulkan"
+
+ARG FEDORA_VERSION=43
+ARG LLAMA_CPP_REPO=https://github.com/ggerganov/llama.cpp
+ARG LLAMA_CPP_BRANCH=master
+# AMDVLK or RADV
+ARG VULKAN_DRIVER=AMDVLK
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install dependencies
+# Note: amdvlk may not be in Fedora repos - use mesa-vulkan-drivers (RADV)
+RUN dnf -y update && dnf -y install \
+    gcc gcc-c++ clang cmake ninja-build make git \
+    python3 python3-pip \
+    # Vulkan - RADV from Mesa
+    vulkan-loader vulkan-loader-devel vulkan-headers vulkan-tools vulkan-validation-layers \
+    mesa-vulkan-drivers \
+    glslc glslang \
+    # Utilities
+    bc jq htop \
+    && dnf clean all
+
+# Clone and build llama.cpp
+RUN git clone --depth 1 --branch ${LLAMA_CPP_BRANCH} ${LLAMA_CPP_REPO} /llama.cpp
+
+WORKDIR /llama.cpp
+
+RUN cmake -B build-vulkan \
+    -DGGML_VULKAN=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-vulkan --parallel $(nproc)
+
+# Create symlinks for easy access
+RUN ln -s /llama.cpp/build-vulkan/bin/llama-cli /usr/local/bin/llama-cli && \
+    ln -s /llama.cpp/build-vulkan/bin/llama-bench /usr/local/bin/llama-bench && \
+    ln -s /llama.cpp/build-vulkan/bin/llama-server /usr/local/bin/llama-server
+
+# Environment - select Vulkan driver
+ENV AMD_VULKAN_ICD=${VULKAN_DRIVER}
+# Vulkan memory settings for large models
+ENV GGML_VK_PREFER_HOST_MEMORY=ON
+
+# User setup
+RUN useradd -m -s /bin/bash runner && \
+    usermod -a -G video,render runner
+
+WORKDIR /workspace
+
+# Benchmark script
+RUN echo '#!/bin/bash\n\
+MODEL=${1:-/models/test.gguf}\n\
+echo "=== llama.cpp Vulkan Benchmark ==="\n\
+echo "Driver: ${AMD_VULKAN_ICD}"\n\
+vulkaninfo 2>/dev/null | grep -m1 "deviceName" || echo "Vulkan device not found"\n\
+echo ""\n\
+if [ -f "$MODEL" ]; then\n\
+    llama-bench --mmap 0 -ngl 999 -m "$MODEL" -p 512,1024,2048 -n 32\n\
+else\n\
+    echo "Model not found: $MODEL"\n\
+    echo "Mount models with: -v /path/to/models:/models"\n\
+fi\n\
+' > /usr/local/bin/run-bench && chmod +x /usr/local/bin/run-bench
+
+# Labels for ablation tracking
+LABEL fedora.version="${FEDORA_VERSION}"
+LABEL llama_cpp.branch="${LLAMA_CPP_BRANCH}"
+LABEL vulkan.driver="${VULKAN_DRIVER}"
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="vulkan"
+
+CMD ["llama-cli", "--help"]

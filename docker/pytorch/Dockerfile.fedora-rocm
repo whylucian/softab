@@ -1,0 +1,117 @@
+# PyTorch with Fedora ROCm packages
+# Ablation: Fedora repos vs AMD repos vs TheRock
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="PyTorch with ROCm from Fedora repos (not AMD repos)"
+LABEL ablation.rocm_source="fedora-repos"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install ROCm from Fedora repos (not AMD repos)
+# NOTE: libatomic is required by TheRock pip packages
+RUN dnf -y update && dnf -y install \
+    python3.12 python3.12-devel \
+    rocm-hip-devel rocblas-devel hipblas-devel \
+    rocminfo rocm-smi \
+    gcc gcc-c++ bc jq htop libatomic \
+    && dnf clean all && \
+    python3.12 -m ensurepip --upgrade
+
+# Show what ROCm version Fedora provides
+RUN echo "Fedora ROCm version:" && \
+    rpm -q rocm-hip-devel rocblas-devel || echo "Package query failed"
+
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+
+# Install PyTorch - try TheRock gfx1151 wheels (most likely to work with Fedora ROCm)
+RUN python3.12 -m pip install --upgrade pip && \
+    python3.12 -m pip install numpy && \
+    python3.12 -m pip install --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ --pre torch || \
+    echo "TheRock wheels failed, trying official" && \
+    python3.12 -m pip install torch --index-url https://download.pytorch.org/whl/rocm6.2
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/bench-pytorch
+#!/usr/bin/env python3.12
+import torch
+import time
+import json
+import subprocess
+
+results = {
+    "pytorch_version": torch.__version__,
+    "rocm_version": str(torch.version.hip) if hasattr(torch.version, "hip") else "N/A",
+    "source": "fedora-rocm-repos",
+    "device": None,
+    "status": "unknown",
+    "benchmarks": {}
+}
+
+# Get Fedora ROCm package version
+try:
+    out = subprocess.check_output(["rpm", "-q", "rocm-hip-devel"], text=True)
+    results["fedora_rocm_pkg"] = out.strip()
+except:
+    results["fedora_rocm_pkg"] = "unknown"
+
+if not torch.cuda.is_available():
+    results["status"] = "FAIL"
+    results["error"] = "CUDA not available"
+    print(json.dumps(results, indent=2))
+    exit(1)
+
+results["device"] = torch.cuda.get_device_name(0)
+
+try:
+    print("Warming up...", flush=True)
+    x = torch.randn(1024, 1024, device="cuda", dtype=torch.float16)
+    for _ in range(5):
+        _ = torch.mm(x, x)
+    torch.cuda.synchronize()
+
+    for size in [1024, 2048, 4096]:
+        print(f"Testing {size}x{size}...", flush=True)
+        a = torch.randn(size, size, device="cuda", dtype=torch.float16)
+        b = torch.randn(size, size, device="cuda", dtype=torch.float16)
+        torch.cuda.synchronize()
+
+        iters = 10
+        start = time.perf_counter()
+        for _ in range(iters):
+            c = torch.mm(a, b)
+        torch.cuda.synchronize()
+        elapsed = (time.perf_counter() - start) / iters
+
+        flops = 2 * size * size * size
+        tflops = (flops / elapsed) / 1e12
+
+        results["benchmarks"][f"matmul_{size}"] = {
+            "tflops": round(tflops, 2),
+            "time_ms": round(elapsed * 1000, 3)
+        }
+
+    peak = max(results["benchmarks"].values(), key=lambda x: x["tflops"])
+    results["peak_tflops"] = peak["tflops"]
+    results["utilization_pct"] = round(peak["tflops"] / 59.4 * 100, 1)
+    results["status"] = "SUCCESS"
+
+except Exception as e:
+    results["status"] = "FAIL"
+    results["error"] = str(e)
+
+print(json.dumps(results, indent=2))
+EOF
+RUN chmod +x /usr/local/bin/bench-pytorch
+
+LABEL ablation.type="pytorch"
+LABEL ablation.rocm_source="fedora-repos"
+
+CMD ["bench-pytorch"]

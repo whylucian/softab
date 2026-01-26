@@ -1,0 +1,87 @@
+# llama.cpp with Fedora native ROCm packages
+# Fedora 43 ships ROCm 6.x with potential gfx1151 patches
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp with Fedora native ROCm packages"
+LABEL backend="hip"
+LABEL rocm.source="fedora-repos"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install ROCm from Fedora repos + build tools
+RUN dnf -y update && dnf -y install \
+    rocm-hip-devel rocm-runtime rocminfo rocm-smi \
+    rocblas-devel hipblas-devel \
+    gcc gcc-c++ cmake ninja-build git \
+    bc jq htop \
+    && dnf clean all
+
+# Environment
+ENV PATH="/opt/rocm/bin:/usr/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:/usr/lib64:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+
+# Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+# Try with override for Fedora's ROCm
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.0
+
+# GFX target
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Clone llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Build with HIP using Fedora's ROCm
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_HIP_UMA=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip --parallel $(nproc)
+
+# Create symlinks
+RUN ln -sf /llama.cpp/build-hip/bin/llama-cli /usr/local/bin/llama-cli && \
+    ln -sf /llama.cpp/build-hip/bin/llama-bench /usr/local/bin/llama-bench && \
+    ln -sf /llama.cpp/build-hip/bin/llama-server /usr/local/bin/llama-server
+
+ENV GGML_CUDA_ENABLE_UNIFIED_MEMORY=ON
+
+WORKDIR /workspace
+
+# Benchmark script
+COPY <<'EOF' /usr/local/bin/run-bench
+#!/bin/bash
+MODEL=${1:-/models/test.gguf}
+echo "=== llama.cpp Fedora ROCm HIP Benchmark ==="
+echo "GFX Target: ${GPU_TARGETS}"
+echo "HSA Override: ${HSA_OVERRIDE_GFX_VERSION}"
+echo "Fedora ROCm: $(rpm -q rocm-hip-devel 2>/dev/null || echo unknown)"
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2
+echo ""
+if [ -f "$MODEL" ]; then
+    llama-bench --mmap 0 -ngl 999 -m "$MODEL" -p 512,1024,2048 -n 32
+else
+    echo "Model not found: $MODEL"
+    echo "Mount models with: -v /path/to/models:/models"
+fi
+EOF
+RUN chmod +x /usr/local/bin/run-bench
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="hip-fedora-rocm"
+
+CMD ["llama-cli", "--help"]

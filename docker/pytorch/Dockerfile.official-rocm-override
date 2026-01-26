@@ -1,0 +1,111 @@
+# PyTorch from official ROCm wheels + HSA_OVERRIDE hack
+# Works but with reduced performance and stability concerns
+
+ARG FEDORA_VERSION=43
+FROM fedora:${FEDORA_VERSION}
+
+LABEL maintainer="softab"
+LABEL description="PyTorch official ROCm + HSA_OVERRIDE hack for gfx1151"
+LABEL ablation.expected_result="WORKS - 30.9 TFLOPS but unstable long-term"
+
+ARG FEDORA_VERSION=43
+ARG ROCM_VERSION=6.2
+ARG GFX_OVERRIDE=11.0.0
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install system dependencies + Python 3.12
+RUN dnf -y update && dnf -y install \
+    python3.12 python3.12-devel \
+    rocminfo rocm-smi \
+    gcc gcc-c++ \
+    bc jq htop \
+    && dnf clean all && \
+    python3.12 -m ensurepip --upgrade
+
+# Install PyTorch from official wheels
+RUN python3.12 -m pip install --upgrade pip && \
+    python3.12 -m pip install numpy && \
+    python3.12 -m pip install torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/rocm${ROCM_VERSION}
+
+# THE HACK - force gfx1100 kernels
+ENV HSA_OVERRIDE_GFX_VERSION=${GFX_OVERRIDE}
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+
+# Disable hipBLASLt warning spam
+ENV TORCH_BLAS_PREFER_HIPBLASLT=0
+
+WORKDIR /workspace
+
+# Benchmark script
+COPY <<'EOF' /usr/local/bin/bench-pytorch
+#!/usr/bin/env python3.12
+import torch
+import time
+import json
+
+results = {
+    "pytorch_version": torch.__version__,
+    "rocm_version": str(torch.version.hip),
+    "gfx_override": "11.0.0",
+    "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+    "status": "unknown",
+    "benchmarks": {}
+}
+
+if not torch.cuda.is_available():
+    results["status"] = "FAIL"
+    results["error"] = "CUDA not available"
+    print(json.dumps(results, indent=2))
+    exit(1)
+
+try:
+    # Warmup
+    x = torch.randn(2048, 2048, device='cuda', dtype=torch.float16)
+    for _ in range(3):
+        _ = torch.mm(x, x)
+    torch.cuda.synchronize()
+
+    # Benchmark
+    for size in [1024, 2048, 4096, 8192]:
+        a = torch.randn(size, size, device='cuda', dtype=torch.float16)
+        b = torch.randn(size, size, device='cuda', dtype=torch.float16)
+        torch.cuda.synchronize()
+
+        iters = 10
+        start = time.perf_counter()
+        for _ in range(iters):
+            c = torch.mm(a, b)
+        torch.cuda.synchronize()
+        elapsed = (time.perf_counter() - start) / iters
+
+        flops = 2 * size * size * size
+        tflops = (flops / elapsed) / 1e12
+
+        results["benchmarks"][f"matmul_{size}"] = {
+            "tflops": round(tflops, 2),
+            "time_ms": round(elapsed * 1000, 3)
+        }
+
+    peak = max(results["benchmarks"].values(), key=lambda x: x["tflops"])
+    results["peak_tflops"] = peak["tflops"]
+    results["status"] = "SUCCESS"
+
+except Exception as e:
+    results["status"] = "FAIL"
+    results["error"] = str(e)
+
+print(json.dumps(results, indent=2))
+EOF
+RUN chmod +x /usr/local/bin/bench-pytorch
+
+# Labels
+LABEL rocm.version="${ROCM_VERSION}"
+LABEL gfx.override="${GFX_OVERRIDE}"
+LABEL ablation.type="pytorch"
+LABEL ablation.source="official-rocm-override"
+
+CMD ["bench-pytorch"]

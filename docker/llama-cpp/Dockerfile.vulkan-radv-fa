@@ -1,0 +1,70 @@
+# llama.cpp with Vulkan RADV + Flash Attention enabled
+# Test if FA improves the best performer (5369 t/s baseline)
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp Vulkan RADV with Flash Attention enabled"
+LABEL ablation.driver="radv"
+LABEL flash_attention="enabled"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install dependencies + Mesa RADV
+RUN dnf -y update && dnf -y install \
+    gcc gcc-c++ cmake ninja-build git \
+    python3 python3-pip \
+    vulkan-loader vulkan-loader-devel vulkan-headers vulkan-tools \
+    mesa-vulkan-drivers \
+    glslc glslang \
+    bc jq htop \
+    && dnf clean all
+
+# Force RADV as the ICD
+ENV AMD_VULKAN_ICD=RADV
+
+# Clone and build llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Build with Vulkan
+RUN cmake -B build-vulkan \
+    -DGGML_VULKAN=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-vulkan -j$(nproc)
+
+RUN ln -sf /llama.cpp/build-vulkan/bin/llama-cli /usr/local/bin/llama-cli && \
+    ln -sf /llama.cpp/build-vulkan/bin/llama-bench /usr/local/bin/llama-bench
+
+ENV GGML_VK_PREFER_HOST_MEMORY=ON
+
+WORKDIR /workspace
+
+# Benchmark script with Flash Attention enabled
+COPY <<'EOF' /usr/local/bin/run-bench
+#!/bin/bash
+MODEL=${1:-/models/test.gguf}
+echo "=== llama.cpp Vulkan RADV + Flash Attention Benchmark ==="
+echo "AMD_VULKAN_ICD: $AMD_VULKAN_ICD"
+echo "Flash Attention: ENABLED (-fa 1)"
+echo ""
+vulkaninfo 2>/dev/null | grep -E "(deviceName|driverName)" | head -2
+echo ""
+
+if [ -f "$MODEL" ]; then
+    echo "Running with Flash Attention + critical flags: --mmap 0 -ngl 999 -fa 1"
+    llama-bench -m "$MODEL" --mmap 0 -ngl 999 -fa 1 -p 512 -n 128
+else
+    echo "Model not found: $MODEL"
+    echo "Mount models with: -v /path/to/models:/models:ro"
+fi
+EOF
+RUN chmod +x /usr/local/bin/run-bench
+
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="vulkan-radv-fa"
+
+CMD ["llama-cli", "--help"]

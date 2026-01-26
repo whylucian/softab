@@ -1,0 +1,147 @@
+# pyannote-audio with scottt/rocm-TheRock PyTorch wheels for gfx1151
+# Self-contained PyTorch build with native gfx1151 support
+# Based on weiziqian's proven gfx1151 configuration
+#
+# Run: podman run --rm --device=/dev/kfd --device=/dev/dri --ipc=host \
+#        -e HF_TOKEN=your_token_here \
+#        softab:pyannote-therock-py311-gfx1151 python test_diarization.py
+
+FROM docker.io/rocm/dev-ubuntu-24.04:6.4.3-complete
+
+LABEL maintainer="softab"
+LABEL description="pyannote-audio with scottt/TheRock PyTorch wheels for Strix Halo"
+LABEL backend="pytorch-therock"
+LABEL rocm.version="6.5.0rc"
+LABEL python.version="3.11"
+LABEL pytorch.source="scottt-therock"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CMAKE_PREFIX_PATH=/opt/rocm
+
+# Install Python 3.11, ffmpeg, and build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    build-essential \
+    ninja-build \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    python3-pip \
+    ffmpeg \
+    git \
+    wget \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# Create venv
+RUN python3.11 -m venv /root/venv
+ENV PATH="/root/venv/bin:$PATH"
+
+# ROCm environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+
+# Strix Halo settings - NO HSA_OVERRIDE for TheRock native gfx1151
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# PyTorch environment
+ENV PYTORCH_ROCM_ARCH="gfx1151"
+ENV ROCBLAS_USE_HIPBLASLT=1
+
+# Install scottt's gfx1151 PyTorch wheel - KNOWN WORKING
+RUN pip install --no-cache-dir \
+    "https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torch-2.7.0a0+gitbfd8155-cp311-cp311-linux_x86_64.whl"
+
+# Install numpy<2.0 (compatibility requirement)
+RUN pip install --no-cache-dir "numpy<2.0"
+
+# Install pyannote-audio 4.0+
+RUN pip install --no-cache-dir \
+    "pyannote.audio>=4.0" \
+    torchaudio \
+    librosa \
+    soundfile
+
+WORKDIR /workspace
+
+# Create test script
+COPY <<'EOF' /workspace/test_diarization.py
+#!/usr/bin/env python3
+"""Test script for pyannote-audio with scottt/TheRock PyTorch"""
+import os
+import sys
+import torch
+import pyannote.audio
+from pyannote.audio import Pipeline
+
+def main():
+    print("=== pyannote-audio with scottt/TheRock PyTorch ===")
+    print(f"Python: {sys.version}")
+    print(f"PyTorch: {torch.__version__}")
+    print(f"pyannote.audio: {pyannote.audio.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    print("Note: Using scottt's self-contained gfx1151 wheel")
+    print("      Native gfx1151 support, no HSA_OVERRIDE needed")
+
+    if torch.cuda.is_available():
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+        print(f"CUDA device count: {torch.cuda.device_count()}")
+
+    hf_token = os.environ.get('HF_TOKEN')
+    if not hf_token:
+        print("\nERROR: HF_TOKEN environment variable not set")
+        return 1
+
+    print("\nLoading speaker-diarization-community-1 pipeline...")
+    try:
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-community-1",
+            use_auth_token=hf_token
+        )
+        print("Pipeline loaded successfully!")
+
+        if torch.cuda.is_available():
+            print("Moving pipeline to GPU...")
+            pipeline.to(torch.device("cuda"))
+            print("Pipeline on GPU!")
+            print("Expected: hipBLASLt enabled for best performance")
+        else:
+            print("WARNING: Running on CPU")
+
+        print("\nTest completed successfully!")
+        return 0
+
+    except Exception as e:
+        print(f"\nERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
+EOF
+
+RUN chmod +x /workspace/test_diarization.py
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="pyannote-audio"
+LABEL ablation.backend="pytorch-therock"
+LABEL ablation.python="3.11"
+LABEL pytorch.wheel="scottt-gfx1151"
+
+CMD ["python3", "test_diarization.py"]

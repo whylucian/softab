@@ -1,0 +1,88 @@
+# whisper.cpp with ROCm 7.1.1 HIP backend
+# Testing if ROCm 7.1.1 has gfx1151 support (expected to fail like llama.cpp)
+#
+# IMPORTANT: Requires --ipc=host flag when running:
+#   podman run --rm --device=/dev/kfd --device=/dev/dri --ipc=host \
+#     -v /path/to/models:/models -v /path/to/samples:/samples \
+#     softab:whisper-hip-rocm711-gfx1151 whisper-cli -m /models/ggml-base.en.bin -f /samples/audio.wav
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.1.1-complete
+
+LABEL maintainer="softab"
+LABEL description="whisper.cpp ROCm 7.1.1 HIP build for Strix Halo"
+LABEL backend="hip"
+LABEL rocm.version="7.1.1"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install build tools + ffmpeg
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build git \
+    ffmpeg \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+
+# GFX target
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Clone whisper.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /whisper.cpp
+
+WORKDIR /whisper.cpp
+
+# Build with HIP
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip --parallel $(nproc)
+
+# Create symlinks
+RUN ln -sf /whisper.cpp/build-hip/bin/whisper-cli /usr/local/bin/whisper-cli && \
+    ln -sf /whisper.cpp/build-hip/bin/whisper-bench /usr/local/bin/whisper-bench 2>/dev/null || true
+
+WORKDIR /workspace
+
+# Benchmark script
+COPY <<'EOF' /usr/local/bin/run-bench
+#!/bin/bash
+AUDIO=${1:-/samples/test_audio.wav}
+MODEL=${2:-/models/ggml-base.en.bin}
+echo "=== whisper.cpp HIP ROCm 7.1.1 Benchmark ==="
+echo "GFX Target: ${GPU_TARGETS}"
+echo "ROCm: $(cat /opt/rocm/.info/version 2>/dev/null || echo unknown)"
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2
+echo ""
+echo "Audio: $AUDIO"
+echo "Model: $MODEL"
+echo ""
+if [ -f "$AUDIO" ] && [ -f "$MODEL" ]; then
+    time whisper-cli -m "$MODEL" -f "$AUDIO"
+else
+    echo "Files not found"
+    echo "Mount: -v /path/to/models:/models -v /path/to/samples:/samples"
+fi
+EOF
+RUN chmod +x /usr/local/bin/run-bench
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="whisper-cpp"
+LABEL ablation.backend="hip-rocm711"
+
+CMD ["whisper-cli", "--help"]

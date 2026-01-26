@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv*/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Experiment raw results (too large to commit)
+experiments/*/raw_results/
+*.log
+
+# Results folder (generated data)
+results/
+
+# Temporary files
+/tmp/
+*.tmp
+*.swp
+*~
+.cache/
+
+# Models and audio files (too large)
+models/
+/data/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+*.wav
+*.mp3
+*.flac
+*.ogg
+
+# Build artifacts
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+*.exe
+
+# Editor files
+.vscode/
+.idea/
+*.sublime-*
+.project
+.settings/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.bak
+
+# Container/Docker
+.dockerignore
+*.tar
+*.tar.gz
+
+# Test coverage
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Git
+*.orig

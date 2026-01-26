@@ -1,0 +1,115 @@
+# Fedora Toolbox for llama.cpp with Vulkan (RADV)
+# Compatible with: toolbox create / distrobox create
+# Inspired by kyuz0's amd-strix-halo-toolboxes
+# Run with: --device /dev/dri --group-add video --security-opt seccomp=unconfined
+
+FROM registry.fedoraproject.org/fedora-toolbox:43
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp Vulkan RADV Toolbox for Strix Halo"
+LABEL usage="toolbox create llama-vulkan --image IMAGE -- --device /dev/dri --group-add video"
+LABEL backend="vulkan-radv"
+LABEL ablation.type="toolbox"
+LABEL reference="kyuz0/amd-strix-halo-toolboxes"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install Vulkan and build tools
+RUN dnf install -y \
+    vulkan-loader vulkan-tools mesa-vulkan-drivers \
+    gcc gcc-c++ cmake ninja-build git \
+    bc jq htop vim nano \
+    wget curl file \
+    && dnf clean all
+
+# Ensure RADV is the default driver (not AMDVLK)
+RUN echo "AMD_VULKAN_ICD=RADV" >> /etc/environment
+
+# Clone and build llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp && \
+    cd /opt/llama.cpp && \
+    cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build build --parallel $(nproc)
+
+# Create symlinks
+RUN ln -s /opt/llama.cpp/build/bin/llama-cli /usr/local/bin/llama-cli && \
+    ln -s /opt/llama.cpp/build/bin/llama-bench /usr/local/bin/llama-bench && \
+    ln -s /opt/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server
+
+# Helper script with kyuz0 critical flags
+RUN echo '#!/bin/bash\n\
+# llama.cpp wrapper with Strix Halo critical flags\n\
+# kyuz0 recommendation: --no-mmap -ngl 999 -fa 1\n\
+\n\
+MODEL="${1}"\n\
+if [ -z "$MODEL" ]; then\n\
+    echo "Usage: llama-run <model.gguf> [additional args]"\n\
+    echo ""\n\
+    echo "This wrapper automatically adds critical Strix Halo flags:"\n\
+    echo "  --no-mmap    (prevents catastrophic slowdown)"\n\
+    echo "  -ngl 999     (load all layers to GPU)"\n\
+    echo "  -fa 1        (enable flash attention)"\n\
+    exit 1\n\
+fi\n\
+shift\n\
+\n\
+echo "Running llama.cpp with Strix Halo optimizations..."\n\
+exec llama-cli --no-mmap -ngl 999 -fa 1 -m "$MODEL" "$@"\n\
+' > /usr/local/bin/llama-run && chmod +x /usr/local/bin/llama-run
+
+# Benchmark helper
+RUN echo '#!/bin/bash\n\
+MODEL="${1}"\n\
+if [ -z "$MODEL" ]; then\n\
+    echo "Usage: llama-bench-run <model.gguf>"\n\
+    exit 1\n\
+fi\n\
+\n\
+echo "=== llama.cpp Vulkan (RADV) Benchmark ==="\n\
+echo "Driver: RADV (Mesa)"\n\
+vulkaninfo --summary 2>/dev/null | grep -E "(deviceName|driverName)" | head -4\n\
+echo ""\n\
+echo "Running benchmark with critical flags: --no-mmap -ngl 999 -fa 1"\n\
+llama-bench --mmap 0 -ngl 999 -fa 1 -m "$MODEL" -p 512,1024,2048,4096 -n 32\n\
+' > /usr/local/bin/llama-bench-run && chmod +x /usr/local/bin/llama-bench-run
+
+# README in container
+RUN echo "# llama.cpp Vulkan RADV Toolbox\n\
+\n\
+## Quick Start\n\
+\n\
+\`\`\`bash\n\
+# Run inference (with automatic critical flags)\n\
+llama-run /path/to/model.gguf\n\
+\n\
+# Run benchmark\n\
+llama-bench-run /path/to/model.gguf\n\
+\n\
+# Manual run (full control)\n\
+llama-cli --no-mmap -ngl 999 -fa 1 -m model.gguf -p \"Your prompt\"\n\
+\`\`\`\n\
+\n\
+## Critical Flags for Strix Halo\n\
+\n\
+Always use these flags (kyuz0 recommendation):\n\
+- \`--no-mmap\` - Prevents catastrophic performance degradation\n\
+- \`-ngl 999\` - Load all layers to GPU\n\
+- \`-fa 1\` - Enable flash attention (stability)\n\
+\n\
+## Performance\n\
+\n\
+Expected on Strix Halo (Radeon 8060S):\n\
+- Prompt processing (pp512): ~5300 t/s\n\
+- Token generation (tg32): ~245 t/s\n\
+\n\
+Based on SoftAb ablation findings (FINDINGS.md)\n\
+" > /opt/README.md
+
+WORKDIR /workspace
+
+# Toolbox compatibility labels
+LABEL com.github.containers.toolbox="true"
+LABEL com.github.debarshiray.toolbox="true"
+
+CMD ["/bin/bash"]

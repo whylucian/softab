@@ -1,0 +1,214 @@
+# llama.cpp comprehensive benchmark image
+# Tests full matrix of context lengths and generation sizes
+# For use with models mounted at /models
+#
+# Run with: podman run --ipc=host --device=/dev/kfd --device=/dev/dri -v ~/models:/models ...
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.2-complete
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp comprehensive benchmark matrix"
+LABEL backend="hip"
+LABEL rocm.version="7.2"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build git \
+    bc jq htop curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Build with all optimizations
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_HIP_UMA=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip --parallel $(nproc)
+
+RUN ln -sf /llama.cpp/build-hip/bin/llama-cli /usr/local/bin/llama-cli && \
+    ln -sf /llama.cpp/build-hip/bin/llama-bench /usr/local/bin/llama-bench && \
+    ln -sf /llama.cpp/build-hip/bin/llama-server /usr/local/bin/llama-server
+
+ENV GGML_CUDA_ENABLE_UNIFIED_MEMORY=ON
+
+WORKDIR /workspace
+
+# Comprehensive benchmark script
+COPY <<'BENCH' /usr/local/bin/run-matrix-bench
+#!/bin/bash
+set -e
+
+# Configuration
+MODELS_DIR=${MODELS_DIR:-/models}
+OUTPUT_DIR=${OUTPUT_DIR:-/results}
+FLASH_ATTN=${FLASH_ATTN:-1}
+USE_MMAP=${USE_MMAP:-0}
+
+# Context lengths to test (prompt processing)
+PP_SIZES="512 1024 2048 4096 8192 16384 32768"
+# Generation lengths to test
+TG_SIZES="128 512 1024 2048 4096 8192"
+
+mkdir -p "$OUTPUT_DIR"
+
+echo "=== llama.cpp Comprehensive Benchmark Matrix ==="
+echo "Date: $(date -Iseconds)"
+echo "GFX Target: ${GPU_TARGETS}"
+echo "ROCm: $(cat /opt/rocm/.info/version 2>/dev/null || echo unknown)"
+echo "Flash Attention: $FLASH_ATTN"
+echo "mmap: $USE_MMAP"
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2
+echo ""
+
+# Find all models
+MODELS=$(find "$MODELS_DIR" -name "*.gguf" -type f 2>/dev/null | sort)
+
+if [ -z "$MODELS" ]; then
+    echo "ERROR: No .gguf models found in $MODELS_DIR"
+    echo "Mount models with: -v /path/to/models:/models"
+    exit 1
+fi
+
+echo "Found models:"
+for m in $MODELS; do
+    SIZE=$(du -h "$m" | cut -f1)
+    echo "  - $(basename $m) ($SIZE)"
+done
+echo ""
+
+# Build mmap flag
+MMAP_FLAG=""
+if [ "$USE_MMAP" = "0" ]; then
+    MMAP_FLAG="--mmap 0"
+fi
+
+# Run benchmarks for each model
+for MODEL in $MODELS; do
+    MODEL_NAME=$(basename "$MODEL" .gguf)
+    RESULT_FILE="$OUTPUT_DIR/${MODEL_NAME}_$(date +%Y%m%d_%H%M%S).json"
+
+    echo "=============================================="
+    echo "Benchmarking: $MODEL_NAME"
+    echo "=============================================="
+
+    # Get model info
+    MODEL_SIZE=$(du -b "$MODEL" | cut -f1)
+
+    # Start JSON output
+    echo "{" > "$RESULT_FILE"
+    echo "  \"model\": \"$MODEL_NAME\"," >> "$RESULT_FILE"
+    echo "  \"model_size_bytes\": $MODEL_SIZE," >> "$RESULT_FILE"
+    echo "  \"timestamp\": \"$(date -Iseconds)\"," >> "$RESULT_FILE"
+    echo "  \"config\": {" >> "$RESULT_FILE"
+    echo "    \"gfx_target\": \"${GPU_TARGETS}\"," >> "$RESULT_FILE"
+    echo "    \"flash_attention\": $FLASH_ATTN," >> "$RESULT_FILE"
+    echo "    \"mmap\": $USE_MMAP" >> "$RESULT_FILE"
+    echo "  }," >> "$RESULT_FILE"
+    echo "  \"results\": [" >> "$RESULT_FILE"
+
+    FIRST=1
+
+    # Test each prompt processing size
+    for PP in $PP_SIZES; do
+        # Skip if model likely can't handle this context
+        # (rough heuristic: 70B models need ~42GB, can handle 32K context)
+
+        echo ""
+        echo "--- PP=$PP, TG=32 ---"
+
+        # Run benchmark and capture output
+        OUTPUT=$(llama-bench $MMAP_FLAG -fa $FLASH_ATTN -ngl 999 -m "$MODEL" -p $PP -n 32 2>&1) || {
+            echo "FAILED: PP=$PP (likely OOM or context too long)"
+            continue
+        }
+
+        # Parse results (llama-bench outputs markdown table)
+        # Extract t/s values
+        PP_TS=$(echo "$OUTPUT" | grep -E "^\|.*pp${PP}" | awk -F'|' '{print $7}' | tr -d ' ' | head -1)
+        TG_TS=$(echo "$OUTPUT" | grep -E "^\|.*tg32" | awk -F'|' '{print $7}' | tr -d ' ' | head -1)
+
+        if [ -n "$PP_TS" ]; then
+            [ $FIRST -eq 0 ] && echo "," >> "$RESULT_FILE"
+            FIRST=0
+            echo "    {\"pp\": $PP, \"tg\": 32, \"pp_ts\": $PP_TS, \"tg_ts\": ${TG_TS:-null}}" >> "$RESULT_FILE"
+            echo "PP: $PP_TS t/s, TG: ${TG_TS:-N/A} t/s"
+        fi
+    done
+
+    # Test longer generation for smaller context
+    for TG in $TG_SIZES; do
+        [ "$TG" -le 128 ] && continue  # Already tested tg32
+
+        echo ""
+        echo "--- PP=512, TG=$TG ---"
+
+        OUTPUT=$(llama-bench $MMAP_FLAG -fa $FLASH_ATTN -ngl 999 -m "$MODEL" -p 512 -n $TG 2>&1) || {
+            echo "FAILED: TG=$TG"
+            continue
+        }
+
+        PP_TS=$(echo "$OUTPUT" | grep -E "^\|.*pp512" | awk -F'|' '{print $7}' | tr -d ' ' | head -1)
+        TG_TS=$(echo "$OUTPUT" | grep -E "^\|.*tg${TG}" | awk -F'|' '{print $7}' | tr -d ' ' | head -1)
+
+        if [ -n "$TG_TS" ]; then
+            [ $FIRST -eq 0 ] && echo "," >> "$RESULT_FILE"
+            FIRST=0
+            echo "    {\"pp\": 512, \"tg\": $TG, \"pp_ts\": ${PP_TS:-null}, \"tg_ts\": $TG_TS}" >> "$RESULT_FILE"
+            echo "PP: ${PP_TS:-N/A} t/s, TG: $TG_TS t/s"
+        fi
+    done
+
+    echo "" >> "$RESULT_FILE"
+    echo "  ]" >> "$RESULT_FILE"
+    echo "}" >> "$RESULT_FILE"
+
+    echo ""
+    echo "Results saved to: $RESULT_FILE"
+done
+
+echo ""
+echo "=== Benchmark Complete ==="
+echo "Results in: $OUTPUT_DIR"
+BENCH
+RUN chmod +x /usr/local/bin/run-matrix-bench
+
+# Simple single-model benchmark
+COPY <<'EOF' /usr/local/bin/run-bench
+#!/bin/bash
+MODEL=${1:-/models/test.gguf}
+echo "=== llama.cpp HIP ROCm 7.2 Quick Benchmark ==="
+if [ -f "$MODEL" ]; then
+    llama-bench --mmap 0 -fa 1 -ngl 999 -m "$MODEL" -p 512,1024,2048,4096,8192 -n 32,128,512
+else
+    echo "Model not found: $MODEL"
+fi
+EOF
+RUN chmod +x /usr/local/bin/run-bench
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="benchmark-matrix"
+
+CMD ["run-matrix-bench"]

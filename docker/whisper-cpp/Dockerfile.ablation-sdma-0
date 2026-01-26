@@ -1,0 +1,80 @@
+# Controlled Ablation: HSA_ENABLE_SDMA=0
+# Base: ROCm 7.2 + whisper.cpp HIP
+# Only variable: SDMA disabled (recommended for stability)
+#
+# Compare with: Dockerfile.ablation-sdma-1
+# Purpose: Test if SDMA affects whisper.cpp stability/performance
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.2-complete
+
+LABEL maintainer="softab"
+LABEL description="whisper.cpp SDMA ablation - DISABLED (0)"
+LABEL ablation.type="controlled"
+LABEL ablation.variable="HSA_ENABLE_SDMA"
+LABEL ablation.value="0"
+LABEL ablation.pair="sdma-ablation"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build git \
+    ffmpeg \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Fixed environment (all other variables constant)
+ENV HIP_VISIBLE_DEVICES=0
+
+# ABLATION VARIABLE: SDMA disabled (recommended default)
+ENV HSA_ENABLE_SDMA=0
+
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /whisper.cpp
+
+WORKDIR /whisper.cpp
+
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip --parallel $(nproc)
+
+RUN ln -sf /whisper.cpp/build-hip/bin/whisper-cli /usr/local/bin/whisper-cli && \
+    ln -sf /whisper.cpp/build-hip/bin/whisper-bench /usr/local/bin/whisper-bench 2>/dev/null || true
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/run-bench
+#!/bin/bash
+AUDIO=${1:-/samples/test_audio.wav}
+MODEL=${2:-/models/ggml-base.en.bin}
+echo "=== whisper.cpp Ablation: SDMA=0 ==="
+echo "HSA_ENABLE_SDMA: $HSA_ENABLE_SDMA (disabled - recommended for stability)"
+echo "GFX Target: ${GPU_TARGETS}"
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2
+echo ""
+if [ -f "$AUDIO" ] && [ -f "$MODEL" ]; then
+    time whisper-cli -m "$MODEL" -f "$AUDIO"
+else
+    echo "Files not found"
+    echo "Mount: -v /path/to/models:/models -v /path/to/samples:/samples"
+fi
+EOF
+RUN chmod +x /usr/local/bin/run-bench
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.backend="hip-rocm72"
+
+CMD ["whisper-cli", "--help"]

@@ -1,0 +1,180 @@
+# pyannote-audio with ROCm 7.2 (simplified, using system Python)
+# Native gfx1151 support in ROCm 7.2
+#
+# IMPORTANT: Requires --ipc=host flag when running:
+#   podman run --rm --device=/dev/kfd --device=/dev/dri --ipc=host \
+#     -e HF_TOKEN=your_token_here \
+#     softab:pyannote-rocm72-gfx1151 python test_diarization.py
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.2-complete
+
+LABEL maintainer="softab"
+LABEL description="pyannote-audio ROCm 7.2 for Strix Halo (simplified)"
+LABEL backend="pytorch-rocm"
+LABEL rocm.version="7.2"
+LABEL pyannote.model="community-1"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install ffmpeg and basic tools (use system Python 3.12)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+    python3-dev \
+    ffmpeg \
+    git \
+    wget \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# ROCm environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# PyTorch environment
+ENV PYTORCH_ROCM_ARCH="gfx1151"
+ENV ROCBLAS_USE_HIPBLASLT=1
+
+# Install PyTorch for ROCm 6.2
+RUN python3 -m pip install --break-system-packages --no-cache-dir \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/rocm6.2
+
+# Install pyannote-audio and dependencies
+RUN python3 -m pip install --break-system-packages --no-cache-dir \
+    pyannote.audio \
+    librosa \
+    soundfile \
+    numpy
+
+WORKDIR /workspace
+
+# Create test script
+COPY <<'EOF' /workspace/test_diarization.py
+#!/usr/bin/env python3
+"""Test script for pyannote-audio on ROCm"""
+import os
+import sys
+import torch
+import pyannote.audio
+from pyannote.audio import Pipeline
+
+def main():
+    print("=== pyannote-audio ROCm 7.2 Test ===")
+    print(f"Python: {sys.version}")
+    print(f"PyTorch: {torch.__version__}")
+    print(f"pyannote.audio: {pyannote.audio.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+
+    if torch.cuda.is_available():
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+        print(f"CUDA device count: {torch.cuda.device_count()}")
+
+    hf_token = os.environ.get('HF_TOKEN')
+    if not hf_token:
+        print("\nERROR: HF_TOKEN environment variable not set")
+        print("Get token from: https://huggingface.co/settings/tokens")
+        print("Accept conditions at: https://huggingface.co/pyannote/speaker-diarization-community-1")
+        return 1
+
+    print("\nLoading speaker-diarization-community-1 pipeline...")
+    try:
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-community-1",
+            use_auth_token=hf_token
+        )
+        print("Pipeline loaded successfully!")
+
+        if torch.cuda.is_available():
+            print("Moving pipeline to GPU...")
+            pipeline.to(torch.device("cuda"))
+            print("Pipeline on GPU!")
+        else:
+            print("WARNING: Running on CPU")
+
+        print("\nTest completed successfully!")
+        return 0
+
+    except Exception as e:
+        print(f"\nERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
+EOF
+
+RUN chmod +x /workspace/test_diarization.py
+
+# Create benchmark script
+COPY <<'EOF' /workspace/bench_diarization.py
+#!/usr/bin/env python3
+"""Benchmark pyannote-audio"""
+import os
+import sys
+import time
+import torch
+from pyannote.audio import Pipeline
+
+def main():
+    audio_file = sys.argv[1] if len(sys.argv) > 1 else None
+
+    if not audio_file or not os.path.exists(audio_file):
+        print("Usage: python bench_diarization.py <audio_file>")
+        return 1
+
+    hf_token = os.environ.get('HF_TOKEN')
+    if not hf_token:
+        print("ERROR: HF_TOKEN required")
+        return 1
+
+    print(f"=== pyannote-audio Benchmark ===")
+    print(f"Audio: {audio_file}")
+    print(f"Device: {'CUDA' if torch.cuda.is_available() else 'CPU'}")
+
+    print("\nLoading pipeline...")
+    pipeline = Pipeline.from_pretrained(
+        "pyannote/speaker-diarization-community-1",
+        use_auth_token=hf_token
+    )
+
+    if torch.cuda.is_available():
+        pipeline.to(torch.device("cuda"))
+
+    print("Running diarization...")
+    start = time.time()
+    diarization = pipeline(audio_file)
+    elapsed = time.time() - start
+
+    print(f"\n=== Results ===")
+    print(f"Processing time: {elapsed:.2f}s")
+    print(f"\nSpeaker segments:")
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        print(f"  [{turn.start:.1f}s - {turn.end:.1f}s] {speaker}")
+
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
+EOF
+
+RUN chmod +x /workspace/bench_diarization.py
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="pyannote-audio"
+LABEL ablation.backend="pytorch-rocm72"
+
+CMD ["python3", "test_diarization.py"]

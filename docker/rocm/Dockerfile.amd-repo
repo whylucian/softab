@@ -1,0 +1,82 @@
+# ROCm from AMD official repository
+# Allows pinning specific ROCm versions
+
+ARG FEDORA_VERSION=43
+FROM fedora:${FEDORA_VERSION}
+
+LABEL maintainer="softab"
+LABEL description="ROCm from AMD official repo for ablation studies"
+LABEL rocm.source="amd-repo"
+
+ARG FEDORA_VERSION=43
+ARG ROCM_VERSION=7.1.1
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install base dependencies
+RUN dnf -y update && dnf -y install \
+    gcc gcc-c++ clang cmake ninja-build make git wget curl \
+    python3 python3-pip python3-devel \
+    vulkan-loader vulkan-headers vulkan-tools \
+    mesa-vulkan-drivers amdvlk \
+    bc jq htop numactl-devel libdrm-devel \
+    && dnf clean all
+
+# Add AMD ROCm repository
+# Note: Using RHEL9 repo as closest match for Fedora
+RUN echo -e "[ROCm]\n\
+name=ROCm\n\
+baseurl=https://repo.radeon.com/rocm/rhel9/${ROCM_VERSION}/main\n\
+enabled=1\n\
+gpgcheck=1\n\
+gpgkey=https://repo.radeon.com/rocm/rocm.gpg.key" > /etc/yum.repos.d/rocm.repo
+
+# Install ROCm from AMD repo
+RUN dnf -y install \
+    rocm-hip-runtime rocm-hip-sdk \
+    rocblas hipblas hipblaslt \
+    rocm-smi rocminfo \
+    && dnf clean all
+
+# User setup
+RUN useradd -m -s /bin/bash builder && \
+    usermod -a -G video,render builder
+
+# Environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+
+# Critical Strix Halo environment variables
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+
+# GFX target
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+ENV HIP_VISIBLE_DEVICES=0
+
+WORKDIR /workspace
+
+# Verification script
+RUN echo '#!/bin/bash\n\
+echo "=== ROCm AMD Repo Verification ==="\n\
+echo "Fedora: $(cat /etc/fedora-release)"\n\
+echo "ROCm Version: '${ROCM_VERSION}'"\n\
+echo "ROCm Installed: $(cat /opt/rocm/.info/version 2>/dev/null || echo unknown)"\n\
+echo "GFX Target: ${GPU_TARGETS}"\n\
+rocminfo 2>/dev/null | grep -E "Name:|Marketing" | head -4\n\
+' > /usr/local/bin/verify-rocm && chmod +x /usr/local/bin/verify-rocm
+
+# Labels for ablation tracking
+LABEL fedora.version="${FEDORA_VERSION}"
+LABEL rocm.version="${ROCM_VERSION}"
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="rocm"
+LABEL ablation.rocm_source="amd-repo"
+
+CMD ["verify-rocm"]

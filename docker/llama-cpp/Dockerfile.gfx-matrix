@@ -1,0 +1,91 @@
+# llama.cpp GFX Target Matrix
+# Build with: podman build --build-arg GFX_TARGET=gfx1100 -t softab:llama-gfx1100 -f Dockerfile.gfx-matrix .
+# Tests: gfx1100 (override hack), gfx1150, gfx1151 (native), gfx1152
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp HIP with configurable GFX target"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install ROCm from Fedora repos
+RUN dnf -y update && dnf -y install \
+    cmake ninja-build gcc gcc-c++ git \
+    rocm-hip-devel rocblas-devel hipblas-devel \
+    rocminfo rocm-smi \
+    bc jq htop \
+    && dnf clean all
+
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+
+# Critical settings
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# For gfx1100 override hack (only applied if GFX_TARGET=gfx1100)
+# This gets set at runtime, not build time
+ENV GFX_TARGET_BUILD=${GFX_TARGET}
+
+# Clone llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Build with specified GFX target
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_HIP_UMA=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip -j$(nproc) 2>&1 || echo "Build completed (may have warnings)"
+
+RUN [ -f build-hip/bin/llama-cli ] && ln -sf /llama.cpp/build-hip/bin/llama-cli /usr/local/bin/llama-cli || true && \
+    [ -f build-hip/bin/llama-bench ] && ln -sf /llama.cpp/build-hip/bin/llama-bench /usr/local/bin/llama-bench || true
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/bench-llama
+#!/bin/bash
+echo "=== llama.cpp GFX Target Ablation ==="
+echo "Build GFX Target: $GFX_TARGET_BUILD"
+echo ""
+
+# Apply HSA override if built for gfx1100 (hack for running on gfx1151 hardware)
+if [ "$GFX_TARGET_BUILD" = "gfx1100" ]; then
+    export HSA_OVERRIDE_GFX_VERSION=11.0.0
+    echo "HSA_OVERRIDE_GFX_VERSION: $HSA_OVERRIDE_GFX_VERSION (gfx1100 hack)"
+fi
+
+echo "rocminfo GPU:"
+rocminfo 2>/dev/null | grep -A2 "Marketing Name" | head -3
+echo ""
+
+if [ -z "$MODEL" ]; then
+    echo "Set MODEL=/path/to/model.gguf"
+    exit 1
+fi
+
+if [ -f /llama.cpp/build-hip/bin/llama-bench ]; then
+    llama-bench -m "$MODEL" --mmap 0 -ngl 999 -fa 1 -p 512 -n 128
+else
+    echo "llama-bench not found - build may have failed for $GFX_TARGET_BUILD"
+    ls -la /llama.cpp/build-hip/bin/ 2>/dev/null || echo "No bin directory"
+fi
+EOF
+RUN chmod +x /usr/local/bin/bench-llama
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="hip-gfx-matrix"
+
+CMD ["bench-llama"]

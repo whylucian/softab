@@ -1,0 +1,115 @@
+# weiziqian's proven approach for gfx1151
+# Uses ROCm 6.4.3 complete base + scottt's Python 3.11 wheel
+# Source: https://github.com/weiziqian/rocm_pytorch_docker_gfx1151
+
+FROM docker.io/rocm/dev-ubuntu-24.04:6.4.3-complete
+
+LABEL maintainer="softab"
+LABEL description="weiziqian's proven gfx1151 config - ROCm 6.4.3 + scottt wheel"
+LABEL ablation.expected_result="SUCCESS - proven working config"
+
+ENV CMAKE_PREFIX_PATH=/opt/rocm
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install build tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    software-properties-common \
+    build-essential \
+    ninja-build \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 3.11 from deadsnakes
+RUN add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create venv and install scottt's wheel
+RUN python3.11 -m venv /root/venv
+ENV PATH="/root/venv/bin:$PATH"
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install "numpy<2.0" pillow && \
+    pip install "https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torch-2.7.0a0+gitbfd8155-cp311-cp311-linux_x86_64.whl"
+
+# Environment
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+
+WORKDIR /workspace
+
+# Benchmark script
+COPY <<'EOF' /usr/local/bin/bench-pytorch
+#!/usr/bin/env python3
+import torch
+import time
+import json
+
+results = {
+    "pytorch_version": torch.__version__,
+    "rocm_version": str(torch.version.hip) if hasattr(torch.version, "hip") else "N/A",
+    "device": None,
+    "status": "unknown",
+    "benchmarks": {}
+}
+
+if not torch.cuda.is_available():
+    results["status"] = "FAIL"
+    results["error"] = "CUDA not available"
+    print(json.dumps(results, indent=2))
+    exit(1)
+
+results["device"] = torch.cuda.get_device_name(0)
+
+try:
+    print("Warming up...", flush=True)
+    x = torch.randn(1024, 1024, device="cuda", dtype=torch.float16)
+    for _ in range(5):
+        _ = torch.mm(x, x)
+    torch.cuda.synchronize()
+
+    for size in [1024, 2048, 4096, 8192]:
+        print(f"Testing {size}x{size}...", flush=True)
+        a = torch.randn(size, size, device="cuda", dtype=torch.float16)
+        b = torch.randn(size, size, device="cuda", dtype=torch.float16)
+        torch.cuda.synchronize()
+
+        iters = 10
+        start = time.perf_counter()
+        for _ in range(iters):
+            c = torch.mm(a, b)
+        torch.cuda.synchronize()
+        elapsed = (time.perf_counter() - start) / iters
+
+        flops = 2 * size * size * size
+        tflops = (flops / elapsed) / 1e12
+
+        results["benchmarks"][f"matmul_{size}"] = {
+            "tflops": round(tflops, 2),
+            "time_ms": round(elapsed * 1000, 3)
+        }
+
+    peak = max(results["benchmarks"].values(), key=lambda x: x["tflops"])
+    results["peak_tflops"] = peak["tflops"]
+    results["utilization_pct"] = round(peak["tflops"] / 59.4 * 100, 1)
+    results["status"] = "SUCCESS"
+
+except Exception as e:
+    results["status"] = "FAIL"
+    results["error"] = str(e)
+
+print(json.dumps(results, indent=2))
+EOF
+RUN chmod +x /usr/local/bin/bench-pytorch
+
+LABEL ablation.type="pytorch"
+LABEL ablation.source="weiziqian"
+LABEL ablation.base="rocm-6.4.3-complete"
+
+CMD ["bench-pytorch"]

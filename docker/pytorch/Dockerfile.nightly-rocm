@@ -1,0 +1,101 @@
+# PyTorch Nightly ROCm builds
+# Different from TheRock - these are from pytorch.org nightly index
+
+ARG FEDORA_VERSION=43
+FROM fedora:${FEDORA_VERSION}
+
+LABEL maintainer="softab"
+LABEL description="PyTorch nightly ROCm from pytorch.org"
+
+ARG ROCM_NIGHTLY_VERSION=6.2
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install dependencies
+RUN dnf -y update && dnf -y install \
+    python3.12 python3.12-devel \
+    rocm-hip-devel rocblas-devel hipblas-devel \
+    rocminfo rocm-smi \
+    gcc gcc-c++ bc jq htop \
+    && dnf clean all && \
+    python3.12 -m ensurepip --upgrade
+
+# Install PyTorch nightly
+RUN python3.12 -m pip install --upgrade pip && \
+    python3.12 -m pip install numpy && \
+    python3.12 -m pip install --index-url https://download.pytorch.org/whl/nightly/rocm${ROCM_NIGHTLY_VERSION} --pre torch torchvision torchaudio
+
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/bench-pytorch
+#!/usr/bin/env python3.12
+import torch
+import time
+import json
+
+results = {
+    "pytorch_version": torch.__version__,
+    "rocm_version": str(torch.version.hip) if hasattr(torch.version, "hip") else "N/A",
+    "source": "pytorch-nightly-rocm",
+    "device": None,
+    "status": "unknown",
+    "benchmarks": {}
+}
+
+if not torch.cuda.is_available():
+    results["status"] = "FAIL"
+    results["error"] = "CUDA not available"
+    print(json.dumps(results, indent=2))
+    exit(1)
+
+results["device"] = torch.cuda.get_device_name(0)
+
+try:
+    print("Warming up...", flush=True)
+    x = torch.randn(1024, 1024, device="cuda", dtype=torch.float16)
+    for _ in range(5):
+        _ = torch.mm(x, x)
+    torch.cuda.synchronize()
+
+    for size in [1024, 2048, 4096]:
+        print(f"Testing {size}x{size}...", flush=True)
+        a = torch.randn(size, size, device="cuda", dtype=torch.float16)
+        b = torch.randn(size, size, device="cuda", dtype=torch.float16)
+        torch.cuda.synchronize()
+
+        iters = 10
+        start = time.perf_counter()
+        for _ in range(iters):
+            c = torch.mm(a, b)
+        torch.cuda.synchronize()
+        elapsed = (time.perf_counter() - start) / iters
+
+        flops = 2 * size * size * size
+        tflops = (flops / elapsed) / 1e12
+
+        results["benchmarks"][f"matmul_{size}"] = {
+            "tflops": round(tflops, 2),
+            "time_ms": round(elapsed * 1000, 3)
+        }
+
+    peak = max(results["benchmarks"].values(), key=lambda x: x["tflops"])
+    results["peak_tflops"] = peak["tflops"]
+    results["utilization_pct"] = round(peak["tflops"] / 59.4 * 100, 1)
+    results["status"] = "SUCCESS"
+
+except Exception as e:
+    results["status"] = "FAIL"
+    results["error"] = str(e)
+
+print(json.dumps(results, indent=2))
+EOF
+RUN chmod +x /usr/local/bin/bench-pytorch
+
+LABEL ablation.type="pytorch"
+LABEL ablation.source="nightly-rocm"
+
+CMD ["bench-pytorch"]

@@ -1,0 +1,112 @@
+# PyTorch with ROCm 6.4.4 - AMD's Official Stable Release
+# Testing AMD's recommended "stable stepping stone" version for Strix Halo
+#
+# Based on: https://github.com/ROCm/ROCm/issues/5339
+# AMD statement: "6.4.4 PyTorch releases are stepping stones to full ROCm 7.x support"
+
+FROM docker.io/rocm/dev-ubuntu-24.04:6.4.4-complete
+
+LABEL maintainer="softab"
+LABEL description="PyTorch with ROCm 6.4.4 (AMD stable) for Strix Halo gfx1151"
+LABEL rocm.version="6.4.4"
+LABEL rocm.source="amd-official"
+LABEL ablation.type="rocm-version"
+LABEL ablation.value="6.4.4-stable"
+
+ARG PYTHON_VERSION=3.12
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install Python and dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python${PYTHON_VERSION} \
+    python${PYTHON_VERSION}-dev \
+    python${PYTHON_VERSION}-venv \
+    python3-pip \
+    build-essential \
+    git wget curl \
+    libatomic1 \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python version
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python${PYTHON_VERSION} 1
+
+# Install PyTorch for ROCm 6.4.4 (skip pip upgrade, use system pip with --break-system-packages)
+RUN pip3 install --break-system-packages --no-cache-dir \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/rocm6.2
+
+# Environment variables for Strix Halo
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.0
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+
+# ROCm paths
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+
+WORKDIR /workspace
+
+# Create benchmark script
+RUN cat > /usr/local/bin/bench-matmul << 'EOFBENCH' && chmod +x /usr/local/bin/bench-matmul
+#!/usr/bin/env python3
+import torch
+import time
+
+print("=== PyTorch ROCm 6.4.4 Benchmark ===")
+print(f"PyTorch version: {torch.__version__}")
+print(f"ROCm version: {torch.version.hip if torch.version.hip else 'N/A'}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"Device: {torch.cuda.get_device_name(0)}")
+    print(f"Device properties: {torch.cuda.get_device_properties(0)}")
+print("")
+
+if not torch.cuda.is_available():
+    print("ERROR: CUDA/ROCm not available")
+    exit(1)
+
+# Matrix multiplication benchmark
+N = 4096
+dtype = torch.float16
+device = "cuda"
+
+print(f"Running {N}x{N} FP16 GEMM benchmark...")
+A = torch.randn(N, N, dtype=dtype, device=device)
+B = torch.randn(N, N, dtype=dtype, device=device)
+
+# Warmup
+for _ in range(10):
+    C = torch.matmul(A, B)
+torch.cuda.synchronize()
+
+# Benchmark
+iterations = 1000
+start = time.time()
+for _ in range(iterations):
+    C = torch.matmul(A, B)
+torch.cuda.synchronize()
+elapsed = time.time() - start
+
+# Calculate TFLOPS
+flops = 2 * N**3 * iterations  # 2N^3 for matmul
+tflops = flops / elapsed / 1e12
+
+print(f"\nResults:")
+print(f"  Iterations: {iterations}")
+print(f"  Total time: {elapsed:.2f}s")
+print(f"  Time per iteration: {elapsed/iterations*1000:.2f}ms")
+print(f"  Performance: {tflops:.2f} TFLOPS")
+print(f"  Utilization: {tflops/59.4*100:.1f}% of peak (59.4 TFLOPS)")
+EOFBENCH
+
+LABEL python.version="${PYTHON_VERSION}"
+
+CMD ["/bin/bash"]

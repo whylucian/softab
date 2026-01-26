@@ -1,0 +1,70 @@
+# ROCm from Fedora repositories
+# Simplest installation path, versions tied to Fedora release
+
+ARG FEDORA_VERSION=43
+FROM fedora:${FEDORA_VERSION}
+
+LABEL maintainer="softab"
+LABEL description="ROCm from Fedora repos for ablation studies"
+LABEL rocm.source="fedora-repo"
+
+ARG FEDORA_VERSION=43
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install ROCm from Fedora repos
+RUN dnf -y update && dnf -y install \
+    # ROCm stack
+    rocm-hip-devel rocblas-devel hipblas-devel hipblaslt-devel \
+    rocminfo hipcc rocm-smi rocm-clinfo \
+    # Build tools
+    gcc gcc-c++ clang cmake ninja-build make git \
+    # Python
+    python3 python3-pip python3-devel \
+    # Vulkan
+    vulkan-loader vulkan-headers vulkan-tools \
+    mesa-vulkan-drivers amdvlk \
+    # Utilities
+    bc jq htop numactl-devel libdrm-devel \
+    && dnf clean all
+
+# User setup
+RUN useradd -m -s /bin/bash builder && \
+    usermod -a -G video,render builder
+
+# Environment
+ENV PATH="/opt/rocm/bin:/usr/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+
+# Critical Strix Halo environment variables
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+
+# GFX target for builds
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+ENV HIP_VISIBLE_DEVICES=0
+
+WORKDIR /workspace
+
+# Verification script
+RUN echo '#!/bin/bash\n\
+echo "=== ROCm Fedora Repo Verification ==="\n\
+echo "Fedora: $(cat /etc/fedora-release)"\n\
+echo "ROCm: $(cat /opt/rocm/.info/version 2>/dev/null || hipconfig --version 2>/dev/null || echo unknown)"\n\
+echo "GFX Target: ${GPU_TARGETS}"\n\
+rocminfo 2>/dev/null | grep -E "Name:|Marketing" | head -4\n\
+' > /usr/local/bin/verify-rocm && chmod +x /usr/local/bin/verify-rocm
+
+# Labels for ablation tracking
+LABEL fedora.version="${FEDORA_VERSION}"
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="rocm"
+LABEL ablation.rocm_source="fedora-repo"
+
+CMD ["verify-rocm"]

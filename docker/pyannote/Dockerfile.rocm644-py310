@@ -1,0 +1,141 @@
+# pyannote-audio with ROCm 6.4.4 and Python 3.10
+# ROCm 6.4.4 is AMD's stable stepping stone for gfx1151
+# Based on successful whisper-cpp ROCm 6.4.4 configuration
+#
+# IMPORTANT: May require HSA_OVERRIDE_GFX_VERSION=11.0.0
+#   podman run --rm --device=/dev/kfd --device=/dev/dri --ipc=host \
+#     -e HSA_OVERRIDE_GFX_VERSION=11.0.0 \
+#     -e HF_TOKEN=your_token_here \
+#     softab:pyannote-rocm644-py310-gfx1151 python test_diarization.py
+
+FROM docker.io/rocm/dev-ubuntu-24.04:6.4.4-complete
+
+LABEL maintainer="softab"
+LABEL description="pyannote-audio ROCm 6.4.4 Python 3.10 for Strix Halo"
+LABEL backend="pytorch-rocm"
+LABEL rocm.version="6.4.4"
+LABEL python.version="3.10"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.10, ffmpeg, and build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3.10-dev \
+    python3.10-venv \
+    python3-pip \
+    ffmpeg \
+    git \
+    wget \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.10 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.10 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.10 1
+
+# ROCm environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# May need HSA_OVERRIDE for ROCm 6.4.4 on gfx1151
+# Set at runtime with: -e HSA_OVERRIDE_GFX_VERSION=11.0.0
+
+# PyTorch environment
+ENV PYTORCH_ROCM_ARCH="gfx1151"
+ENV ROCBLAS_USE_HIPBLASLT=1
+
+# Install PyTorch for ROCm 6.2
+RUN python3 -m pip install --no-cache-dir \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/rocm6.2
+
+# Install pyannote-audio 4.0+
+RUN python3 -m pip install --no-cache-dir \
+    "pyannote.audio>=4.0" \
+    torchaudio \
+    librosa \
+    soundfile \
+    numpy
+
+WORKDIR /workspace
+
+# Create test script
+COPY <<'EOF' /workspace/test_diarization.py
+#!/usr/bin/env python3
+"""Test script for pyannote-audio on ROCm 6.4.4"""
+import os
+import sys
+import torch
+import pyannote.audio
+from pyannote.audio import Pipeline
+
+def main():
+    print("=== pyannote-audio ROCm 6.4.4 Test ===")
+    print(f"Python: {sys.version}")
+    print(f"PyTorch: {torch.__version__}")
+    print(f"pyannote.audio: {pyannote.audio.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    print(f"HSA_OVERRIDE_GFX_VERSION: {os.environ.get('HSA_OVERRIDE_GFX_VERSION', 'not set')}")
+
+    if torch.cuda.is_available():
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+        print(f"CUDA device count: {torch.cuda.device_count()}")
+
+    hf_token = os.environ.get('HF_TOKEN')
+    if not hf_token:
+        print("\nERROR: HF_TOKEN environment variable not set")
+        return 1
+
+    print("\nLoading speaker-diarization-community-1 pipeline...")
+    try:
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-community-1",
+            use_auth_token=hf_token
+        )
+        print("Pipeline loaded successfully!")
+
+        if torch.cuda.is_available():
+            print("Moving pipeline to GPU...")
+            pipeline.to(torch.device("cuda"))
+            print("Pipeline on GPU!")
+        else:
+            print("WARNING: Running on CPU")
+
+        print("\nTest completed successfully!")
+        return 0
+
+    except Exception as e:
+        print(f"\nERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
+EOF
+
+RUN chmod +x /workspace/test_diarization.py
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="pyannote-audio"
+LABEL ablation.backend="pytorch-rocm644"
+LABEL ablation.python="3.10"
+
+CMD ["python3", "test_diarization.py"]

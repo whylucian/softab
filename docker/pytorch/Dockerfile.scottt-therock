@@ -1,0 +1,142 @@
+# PyTorch from scottt/rocm-TheRock wheels
+# Recommended for CV/ML research on Strix Halo
+
+ARG FEDORA_VERSION=43
+FROM fedora:${FEDORA_VERSION}
+
+LABEL maintainer="softab"
+LABEL description="PyTorch from scottt/rocm-TheRock - recommended for CV work"
+LABEL ablation.expected_result="SUCCESS - native gfx1151, optimized for research"
+
+ARG FEDORA_VERSION=43
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install system ROCm + dependencies + Python 3.12
+RUN dnf -y update && dnf -y install \
+    python3.11 python3.11-devel \
+    rocm-hip-devel rocblas-devel hipblas-devel hipblaslt-devel \
+    rocminfo rocm-smi hipcc \
+    gcc gcc-c++ cmake ninja-build \
+    bc jq htop wget git \
+    && dnf clean all && \
+    python3.11 -m ensurepip --upgrade
+
+# Install from scottt's TheRock wheels - direct URL for gfx1151
+# Source: https://github.com/scottt/rocm-TheRock/releases/tag/v6.5.0rc-pytorch
+# NOTE: Python 3.11 wheel available, not 3.12
+RUN python3.11 -m pip install --upgrade pip && \
+    python3.11 -m pip install "numpy<2.0" pillow && \
+    python3.11 -m pip install "https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-pytorch/torch-2.7.0a0+gitbfd8155-cp311-cp311-linux_x86_64.whl" || \
+    python3.11 -m pip install --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ --pre torch torchvision torchaudio
+
+# Environment for native gfx1151
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+ENV TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+ENV HIP_VISIBLE_DEVICES=0
+
+# GFX target
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+WORKDIR /workspace
+
+# CV-focused benchmark script
+COPY <<'EOF' /usr/local/bin/bench-cv
+#!/usr/bin/env python3.11
+"""Benchmark script for CV workloads on ROCm"""
+import torch
+import torch.nn as nn
+import time
+import json
+
+results = {
+    "pytorch_version": torch.__version__,
+    "rocm_version": str(torch.version.hip),
+    "device": None,
+    "status": "unknown",
+    "benchmarks": {}
+}
+
+if not torch.cuda.is_available():
+    results["status"] = "FAIL"
+    results["error"] = "CUDA not available"
+    print(json.dumps(results, indent=2))
+    exit(1)
+
+results["device"] = torch.cuda.get_device_name(0)
+
+try:
+    # Test 1: MatMul (GEMM)
+    print("Testing MatMul...", flush=True)
+    a = torch.randn(4096, 4096, device='cuda', dtype=torch.float16)
+    b = torch.randn(4096, 4096, device='cuda', dtype=torch.float16)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    for _ in range(10):
+        c = torch.mm(a, b)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) / 10
+    tflops = (2 * 4096**3 / elapsed) / 1e12
+    results["benchmarks"]["matmul_4096"] = {"tflops": round(tflops, 2)}
+
+    # Test 2: Conv2D (typical CV operation)
+    print("Testing Conv2D...", flush=True)
+    conv = nn.Conv2d(256, 256, 3, padding=1).cuda().half()
+    x = torch.randn(8, 256, 64, 64, device='cuda', dtype=torch.float16)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    for _ in range(50):
+        y = conv(x)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) / 50
+    results["benchmarks"]["conv2d_256x64"] = {"time_ms": round(elapsed * 1000, 3)}
+
+    # Test 3: Batch Norm
+    print("Testing BatchNorm...", flush=True)
+    bn = nn.BatchNorm2d(256).cuda().half()
+    start = time.perf_counter()
+    for _ in range(50):
+        y = bn(x)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) / 50
+    results["benchmarks"]["batchnorm_256x64"] = {"time_ms": round(elapsed * 1000, 3)}
+
+    # Test 4: Attention (transformer-style)
+    print("Testing Attention...", flush=True)
+    q = torch.randn(8, 8, 1024, 64, device='cuda', dtype=torch.float16)
+    k = torch.randn(8, 8, 1024, 64, device='cuda', dtype=torch.float16)
+    v = torch.randn(8, 8, 1024, 64, device='cuda', dtype=torch.float16)
+    torch.cuda.synchronize()
+
+    start = time.perf_counter()
+    for _ in range(10):
+        attn = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+    torch.cuda.synchronize()
+    elapsed = (time.perf_counter() - start) / 10
+    results["benchmarks"]["sdpa_1024"] = {"time_ms": round(elapsed * 1000, 3)}
+
+    results["status"] = "SUCCESS"
+    results["peak_matmul_tflops"] = results["benchmarks"]["matmul_4096"]["tflops"]
+
+except Exception as e:
+    results["status"] = "FAIL"
+    results["error"] = str(e)
+
+print(json.dumps(results, indent=2))
+EOF
+RUN chmod +x /usr/local/bin/bench-cv
+
+# Labels
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="pytorch"
+LABEL ablation.source="scottt-therock"
+LABEL ablation.focus="computer-vision"
+
+CMD ["bench-cv"]

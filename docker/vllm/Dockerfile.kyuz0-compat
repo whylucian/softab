@@ -1,0 +1,93 @@
+# vLLM inspired by kyuz0's vllm-toolboxes approach
+# See: github.com/kyuz0/amd-strix-halo-vllm-toolboxes
+# Using known-working configuration for Strix Halo
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.2-complete
+
+LABEL maintainer="softab"
+LABEL description="vLLM ROCm 7.2 kyuz0-style for Strix Halo"
+LABEL backend="hip"
+LABEL rocm.version="7.2"
+LABEL ablation.type="vllm-kyuz0-compat"
+LABEL reference="kyuz0/amd-strix-halo-vllm-toolboxes"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.12 and build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 python3.12-dev python3.12-venv python3-pip \
+    build-essential cmake ninja-build git \
+    curl wget ca-certificates \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.12 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
+
+# ROCm environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Critical Strix Halo settings (kyuz0 recommended)
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+
+# GFX target - native gfx1151 in ROCm 7.2
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Create venv
+RUN python3.12 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# Install vLLM with ROCm support
+# May need custom build for gfx1151 - kyuz0 builds from source
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir \
+    torch torchvision --index-url https://download.pytorch.org/whl/rocm6.2
+
+# Try wheel first, fall back to source
+RUN pip install --no-cache-dir vllm || \
+    (echo "Building vLLM from source for gfx1151..." && \
+     git clone https://github.com/vllm-project/vllm.git /tmp/vllm && \
+     cd /tmp/vllm && \
+     PYTORCH_ROCM_ARCH=${GFX_TARGET} pip install -e . && \
+     cd / && rm -rf /tmp/vllm)
+
+# User setup
+RUN useradd -m -s /bin/bash runner && \
+    usermod -a -G video,render runner
+
+WORKDIR /workspace
+
+# Test script with kyuz0 style checks
+RUN echo '#!/bin/bash\n\
+echo "=== vLLM ROCm 7.2 (kyuz0-compat) Test ==="\n\
+echo "ROCm Version: 7.2 (native gfx1151)"\n\
+echo "GFX Target: ${GPU_TARGETS}"\n\
+echo ""\n\
+echo "System Info:"\n\
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2\n\
+echo ""\n\
+echo "Python packages:"\n\
+python3 -c "import vllm; print(f\"vLLM: {vllm.__version__}\")" || echo "vLLM import failed"\n\
+python3 -c "import torch; print(f\"PyTorch: {torch.__version__} (ROCm {torch.version.hip})\")" || echo "PyTorch check failed"\n\
+echo ""\n\
+echo "Critical: Run with --ipc=host for Strix Halo unified memory"\n\
+echo "podman run --ipc=host --device=/dev/kfd --device=/dev/dri ..."\n\
+' > /usr/local/bin/run-test && chmod +x /usr/local/bin/run-test
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.backend="vllm-kyuz0-compat"
+LABEL base.image="rocm/dev-ubuntu-24.04:7.2-complete"
+
+CMD ["/bin/bash"]

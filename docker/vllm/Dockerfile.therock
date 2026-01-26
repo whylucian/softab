@@ -1,0 +1,18 @@
+FROM docker.io/rocm/vllm-dev:rocm6.4.1_navi_ubuntu24.04_py3.12_pytorch_2.7_vllm_0.8.5
+
+LABEL description="vLLM for Strix Halo gfx1151"
+
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+
+# Test script
+COPY <<'SCRIPT' /usr/local/bin/test-vllm
+#!/bin/bash
+python3 -c "import vllm; print('vLLM version:', vllm.__version__)"
+python3 -c "import torch; print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
+SCRIPT
+RUN chmod +x /usr/local/bin/test-vllm
+
+CMD ["test-vllm"]

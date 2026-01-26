@@ -1,0 +1,75 @@
+# whisper.cpp with Vulkan backend - AMDVLK driver
+# Testing AMDVLK vs RADV performance for whisper.cpp
+# Note: AMDVLK may not work on gfx1151 (llama.cpp falls back to CPU)
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="whisper.cpp Vulkan AMDVLK for Strix Halo"
+LABEL backend="vulkan"
+LABEL vulkan.driver="amdvlk"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install Vulkan SDK + AMDVLK + build tools + ffmpeg
+# Note: AMDVLK may not be in Fedora repos, this attempts to install it
+RUN dnf -y update && dnf -y install \
+    vulkan-loader vulkan-tools \
+    vulkan-headers vulkan-validation-layers vulkan-devel \
+    glslc glslang spirv-tools \
+    gcc gcc-c++ cmake ninja-build git \
+    ffmpeg \
+    bc jq htop \
+    && dnf clean all
+
+# Attempt to install AMDVLK if available
+# If not available, will fall back to RADV
+RUN dnf -y install amdvlk 2>/dev/null || echo "AMDVLK not available in repos, using RADV fallback"
+
+# Clone whisper.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /whisper.cpp
+
+WORKDIR /whisper.cpp
+
+# Build with Vulkan
+RUN cmake -B build-vulkan \
+    -DGGML_VULKAN=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-vulkan --parallel $(nproc)
+
+# Create symlinks
+RUN ln -sf /whisper.cpp/build-vulkan/bin/whisper-cli /usr/local/bin/whisper-cli && \
+    ln -sf /whisper.cpp/build-vulkan/bin/whisper-bench /usr/local/bin/whisper-bench 2>/dev/null || true
+
+# Select AMDVLK driver
+ENV AMD_VULKAN_ICD=AMDVLK
+
+WORKDIR /workspace
+
+# Benchmark script
+COPY <<'EOF' /usr/local/bin/run-bench
+#!/bin/bash
+AUDIO=${1:-/samples/test_audio.wav}
+MODEL=${2:-/models/ggml-base.en.bin}
+echo "=== whisper.cpp Vulkan AMDVLK Benchmark ==="
+echo "Vulkan driver: AMDVLK (AMD proprietary)"
+vulkaninfo --summary 2>/dev/null | grep -E "(deviceName|driverName)" | head -4
+echo ""
+echo "Audio: $AUDIO"
+echo "Model: $MODEL"
+echo ""
+if [ -f "$AUDIO" ] && [ -f "$MODEL" ]; then
+    time whisper-cli -m "$MODEL" -f "$AUDIO"
+else
+    echo "Files not found"
+    echo "Mount: -v /path/to/models:/models -v /path/to/samples:/samples"
+fi
+EOF
+RUN chmod +x /usr/local/bin/run-bench
+
+LABEL ablation.type="whisper-cpp"
+LABEL ablation.backend="vulkan-amdvlk"
+
+CMD ["whisper-cli", "--help"]

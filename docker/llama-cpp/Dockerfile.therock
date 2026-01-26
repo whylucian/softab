@@ -1,0 +1,97 @@
+# llama.cpp with TheRock nightlies (native gfx1151)
+# Using TheRock ROCm SDK instead of system ROCm 6.4.3
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp with TheRock nightlies for native gfx1151"
+LABEL ablation.expected_result="SUCCESS - native gfx1151 SDK"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install build tools
+RUN dnf -y update && dnf -y install \
+    cmake ninja-build gcc gcc-c++ git \
+    python3.12 python3.12-devel \
+    bc jq htop wget \
+    && dnf clean all && \
+    python3.12 -m ensurepip --upgrade
+
+# Install TheRock ROCm SDK with gfx1151 support
+RUN python3.12 -m pip install --upgrade pip && \
+    python3.12 -m pip install --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ --pre \
+    rocm-sdk-core rocm-sdk-libraries-gfx1151
+
+# Set up ROCm environment from TheRock
+ENV ROCM_PATH=/usr/local
+ENV HIP_PATH=/usr/local
+ENV PATH="/usr/local/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+
+# Critical settings
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Clone llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Build with HIP using TheRock SDK
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_HIP_UMA=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip -j$(nproc) || echo "Build may have partial failures"
+
+# Create symlinks if binaries exist
+RUN [ -f build-hip/bin/llama-cli ] && ln -s /llama.cpp/build-hip/bin/llama-cli /usr/local/bin/llama-cli || true && \
+    [ -f build-hip/bin/llama-bench ] && ln -s /llama.cpp/build-hip/bin/llama-bench /usr/local/bin/llama-bench || true
+
+WORKDIR /workspace
+
+# Benchmark script
+COPY <<'EOF' /usr/local/bin/bench-llama
+#!/bin/bash
+echo "=== llama.cpp TheRock HIP Benchmark ==="
+echo "GFX Target: $AMDGPU_TARGETS"
+echo "ROCBLAS_USE_HIPBLASLT: $ROCBLAS_USE_HIPBLASLT"
+echo ""
+
+if [ -z "$MODEL" ]; then
+    echo "No MODEL specified. Set MODEL=/path/to/model.gguf"
+    echo "Example: podman run -e MODEL=/models/qwen.gguf -v ~/models:/models ..."
+    exit 1
+fi
+
+echo "Model: $MODEL"
+echo ""
+
+if [ -f /llama.cpp/build-hip/bin/llama-bench ]; then
+    /llama.cpp/build-hip/bin/llama-bench \
+        -m "$MODEL" \
+        --mmap 0 \
+        -ngl 999 \
+        -fa 1 \
+        -p 512 \
+        -n 128
+else
+    echo "llama-bench not found - build may have failed"
+    ls -la /llama.cpp/build-hip/bin/ 2>/dev/null || echo "No bin directory"
+fi
+EOF
+RUN chmod +x /usr/local/bin/bench-llama
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="therock-hip"
+
+CMD ["bench-llama"]

@@ -1,0 +1,84 @@
+# llama.cpp with TheRock full ROCm tarball
+# Full HIP toolchain for native gfx1151
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp with TheRock full ROCm for native gfx1151"
+
+ARG GFX_TARGET=gfx1151
+ARG THEROCK_URL=https://therock-nightly-tarball.s3.us-east-2.amazonaws.com/therock-dist-linux-gfx110X-all-7.11.0a20260113.tar.gz
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install build tools
+RUN dnf -y update && dnf -y install \
+    cmake ninja-build gcc gcc-c++ git \
+    python3 python3-pip \
+    wget tar xz \
+    bc jq htop \
+    && dnf clean all
+
+# Download and install TheRock ROCm nightly tarball
+RUN wget -O /tmp/therock.tar.gz ${THEROCK_URL} && \
+    mkdir -p /opt/rocm && \
+    tar -xzf /tmp/therock.tar.gz -C /opt/rocm --strip-components=1 && \
+    rm /tmp/therock.tar.gz
+
+# Set up ROCm environment
+ENV ROCM_PATH=/opt/rocm
+ENV HIP_PATH=/opt/rocm
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Critical settings
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Clone llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Build with HIP
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_HIP_UMA=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip -j$(nproc)
+
+# Create symlinks
+RUN ln -sf /llama.cpp/build-hip/bin/llama-cli /usr/local/bin/llama-cli && \
+    ln -sf /llama.cpp/build-hip/bin/llama-bench /usr/local/bin/llama-bench
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/bench-llama
+#!/bin/bash
+echo "=== llama.cpp TheRock Full HIP Benchmark ==="
+echo "ROCm Path: $ROCM_PATH"
+echo "GFX Target: $AMDGPU_TARGETS"
+
+/opt/rocm/bin/rocminfo 2>/dev/null | grep -A2 "Marketing Name" | head -3
+
+if [ -z "$MODEL" ]; then
+    echo "Set MODEL=/path/to/model.gguf"
+    exit 1
+fi
+
+llama-bench -m "$MODEL" --mmap 0 -ngl 999 -fa 1 -p 512 -n 128
+EOF
+RUN chmod +x /usr/local/bin/bench-llama
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="therock-full-hip"
+
+CMD ["bench-llama"]

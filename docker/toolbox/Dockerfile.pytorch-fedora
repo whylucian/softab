@@ -1,0 +1,151 @@
+# Fedora Toolbox for PyTorch with ROCm
+# Compatible with: toolbox create / distrobox create
+# Based on SoftAb findings: best performance with Fedora ROCm + Python 3.11
+
+FROM registry.fedoraproject.org/fedora-toolbox:43
+
+LABEL maintainer="softab"
+LABEL description="PyTorch ROCm Toolbox for Strix Halo (based on SoftAb findings)"
+LABEL usage="toolbox create pytorch --image IMAGE -- --device /dev/dri --device /dev/kfd"
+LABEL backend="rocm"
+LABEL ablation.type="toolbox"
+LABEL performance="36.27 TFLOPS (SoftAb best)"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install ROCm and Python 3.11 (best performer per SoftAb findings)
+RUN dnf install -y \
+    python3.11 python3.11-pip python3.11-devel \
+    rocm-hip-devel rocm-runtime rocminfo rocm-smi \
+    rocblas-devel hipblas-devel \
+    libatomic \
+    gcc gcc-c++ cmake ninja-build git \
+    bc jq htop vim nano \
+    wget curl file \
+    && dnf clean all
+
+# Create Python 3.11 venv
+RUN python3.11 -m venv /opt/venv-pytorch
+ENV PATH="/opt/venv-pytorch/bin:${PATH}"
+
+# Install PyTorch with ROCm 6.2 (SoftAb recommended)
+RUN pip install --upgrade pip && \
+    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.2
+
+# Install common ML packages
+RUN pip install numpy scipy matplotlib jupyter notebook ipython
+
+# ROCm environment for Strix Halo (SoftAb optimal config)
+RUN echo '#!/bin/bash\n\
+# SoftAb optimal PyTorch configuration for Strix Halo\n\
+# Achieves 36.27 TFLOPS on matmul benchmark\n\
+\n\
+export HSA_OVERRIDE_GFX_VERSION=11.0.0  # Required for official wheels\n\
+export HSA_ENABLE_SDMA=0                # Stability\n\
+export ROCBLAS_USE_HIPBLASLT=1          # Performance\n\
+export GPU_MAX_HW_QUEUES=4              # Slight improvement\n\
+\n\
+# Activate venv\n\
+source /opt/venv-pytorch/bin/activate\n\
+\n\
+echo "PyTorch ROCm environment configured (SoftAb optimal)"\n\
+' > /etc/profile.d/pytorch-strix-halo.sh && chmod +x /etc/profile.d/pytorch-strix-halo.sh
+
+# Benchmark script
+RUN echo '#!/bin/bash\n\
+source /etc/profile.d/pytorch-strix-halo.sh\n\
+\n\
+python3 << EOF\n\
+import torch\n\
+import time\n\
+\n\
+print("=== PyTorch ROCm Benchmark ===")\n\
+print(f"PyTorch version: {torch.__version__}")\n\
+print(f"ROCm available: {torch.cuda.is_available()}")\n\
+if torch.cuda.is_available():\n\
+    print(f"GPU: {torch.cuda.get_device_name(0)}")\n\
+    print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")\n\
+    print("")\n\
+    \n\
+    # FP16 GEMM benchmark (SoftAb test)\n\
+    N = 4096\n\
+    device = "cuda"\n\
+    dtype = torch.float16\n\
+    \n\
+    A = torch.randn(N, N, device=device, dtype=dtype)\n\
+    B = torch.randn(N, N, device=device, dtype=dtype)\n\
+    \n\
+    # Warmup\n\
+    for _ in range(10):\n\
+        C = torch.matmul(A, B)\n\
+    torch.cuda.synchronize()\n\
+    \n\
+    # Benchmark\n\
+    iterations = 100\n\
+    start = time.time()\n\
+    for _ in range(iterations):\n\
+        C = torch.matmul(A, B)\n\
+    torch.cuda.synchronize()\n\
+    elapsed = time.time() - start\n\
+    \n\
+    # Calculate TFLOPS\n\
+    flops_per_matmul = 2 * N * N * N\n\
+    total_flops = flops_per_matmul * iterations\n\
+    tflops = (total_flops / elapsed) / 1e12\n\
+    \n\
+    print(f"Matrix size: {N}x{N} (FP16)")\n\
+    print(f"Iterations: {iterations}")\n\
+    print(f"Time: {elapsed:.3f}s")\n\
+    print(f"Performance: {tflops:.2f} TFLOPS")\n\
+    print("")\n\
+    print(f"SoftAb best: 36.27 TFLOPS (Fedora ROCm + Python 3.11)")\n\
+else:\n\
+    print("ERROR: ROCm not available")\n\
+EOF\n\
+' > /usr/local/bin/pytorch-bench && chmod +x /usr/local/bin/pytorch-bench
+
+# README
+RUN echo "# PyTorch ROCm Toolbox for Strix Halo\n\
+\n\
+Based on SoftAb ablation study findings (101 configurations tested).\n\
+\n\
+## Optimal Configuration\n\
+\n\
+- **Distribution**: Fedora 43\n\
+- **Python**: 3.11 (better than 3.12)\n\
+- **PyTorch**: Official rocm6.2 wheels\n\
+- **Performance**: 36.27 TFLOPS (62% of theoretical 59.4)\n\
+\n\
+## Quick Start\n\
+\n\
+\`\`\`bash\n\
+# Activate environment\n\
+source /etc/profile.d/pytorch-strix-halo.sh\n\
+\n\
+# Run benchmark\n\
+pytorch-bench\n\
+\n\
+# Start Jupyter\n\
+jupyter notebook --ip=0.0.0.0 --no-browser\n\
+\`\`\`\n\
+\n\
+## Environment Variables\n\
+\n\
+Critical for Strix Halo (auto-loaded):\n\
+- \`HSA_OVERRIDE_GFX_VERSION=11.0.0\` - Required for official wheels\n\
+- \`HSA_ENABLE_SDMA=0\` - Stability (disable DMA)\n\
+- \`ROCBLAS_USE_HIPBLASLT=1\` - Performance (+10-20%)\n\
+\n\
+## Reference\n\
+\n\
+See SoftAb FINDINGS.md for complete ablation results.\n\
+" > /opt/README.md
+
+WORKDIR /workspace
+
+# Toolbox compatibility labels
+LABEL com.github.containers.toolbox="true"
+LABEL com.github.debarshiray.toolbox="true"
+
+CMD ["/bin/bash"]

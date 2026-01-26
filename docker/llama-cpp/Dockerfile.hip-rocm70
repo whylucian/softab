@@ -1,0 +1,92 @@
+# llama.cpp with ROCm 7.0.1 HIP backend
+# Testing ROCm 7.0.x series (expected similar issues to 7.1.1)
+# KNOWLEDGE_BASE mentions 7.0.x but no direct testing done
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.0.1-complete
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp ROCm 7.0.1 HIP build for Strix Halo"
+LABEL backend="hip"
+LABEL rocm.version="7.0.1"
+LABEL ablation.type="rocm-version"
+LABEL status="expected-failure"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build git \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# ROCm environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Critical Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+
+# GFX target
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Clone llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Build with HIP
+RUN HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
+    cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_HIP_UMA=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip --parallel $(nproc)
+
+# Create symlinks
+RUN ln -s /llama.cpp/build-hip/bin/llama-cli /usr/local/bin/llama-cli && \
+    ln -s /llama.cpp/build-hip/bin/llama-bench /usr/local/bin/llama-bench && \
+    ln -s /llama.cpp/build-hip/bin/llama-server /usr/local/bin/llama-server
+
+# User setup
+RUN useradd -m -s /bin/bash runner && \
+    usermod -a -G video,render runner
+
+# UMA memory for large models
+ENV GGML_CUDA_ENABLE_UNIFIED_MEMORY=ON
+
+WORKDIR /workspace
+
+# Benchmark script
+RUN echo '#!/bin/bash\n\
+MODEL=${1:-/models/test.gguf}\n\
+echo "=== llama.cpp ROCm 7.0.1 HIP Benchmark ==="\n\
+echo "ROCm Version: 7.0.1 (expected to segfault like 7.1.1)"\n\
+echo "GFX Target: ${GPU_TARGETS}"\n\
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2\n\
+echo ""\n\
+if [ -f "$MODEL" ]; then\n\
+    echo "Running with critical flags: --no-mmap -ngl 999 -fa 1"\n\
+    echo "NOTE: This version expected to crash during model loading"\n\
+    llama-bench --mmap 0 -ngl 999 -fa 1 -m "$MODEL" -p 512 -n 32 || echo "FAILED as expected"\n\
+else\n\
+    echo "Model not found: $MODEL"\n\
+    echo "Run with: podman run --ipc=host --device=/dev/kfd --device=/dev/dri ..."\n\
+fi\n\
+' > /usr/local/bin/run-bench && chmod +x /usr/local/bin/run-bench
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.backend="hip-rocm70"
+LABEL base.image="rocm/dev-ubuntu-24.04:7.0.1-complete"
+
+CMD ["llama-cli", "--help"]

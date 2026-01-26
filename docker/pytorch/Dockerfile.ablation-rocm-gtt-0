@@ -1,0 +1,166 @@
+# Controlled Ablation: pytorch-rocm-gtt DISABLED
+# Base: Fedora ROCm + Official PyTorch rocm6.2
+# Only variable: pytorch-rocm-gtt NOT installed
+#
+# Compare with: Dockerfile.ablation-rocm-gtt-1
+
+ARG FEDORA_VERSION=43
+FROM fedora:${FEDORA_VERSION}
+
+LABEL maintainer="softab"
+LABEL description="PyTorch rocm-gtt ablation - DISABLED (0)"
+LABEL ablation.type="controlled"
+LABEL ablation.variable="PYTORCH_ROCM_GTT"
+LABEL ablation.value="0"
+LABEL ablation.pair="rocm-gtt-ablation"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+RUN dnf -y update && dnf -y install \
+    python3.12 python3.12-devel \
+    rocm-hip-devel rocblas-devel hipblas-devel hipblaslt-devel \
+    rocminfo rocm-smi hipcc libatomic \
+    gcc gcc-c++ cmake ninja-build bc jq htop wget \
+    && dnf clean all && python3.12 -m ensurepip --upgrade
+
+RUN python3.12 -m pip install --upgrade pip numpy && \
+    python3.12 -m pip install --index-url https://download.pytorch.org/whl/rocm6.2 \
+    torch torchvision torchaudio
+
+# Fixed environment (all other variables constant)
+ENV HSA_ENABLE_SDMA=0
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+ENV TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+ENV HIP_VISIBLE_DEVICES=0
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.0
+ENV ROCBLAS_USE_HIPBLASLT=1
+
+# ABLATION VARIABLE: pytorch-rocm-gtt NOT installed
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/bench-pytorch-vram
+#!/usr/bin/env python3.12
+import torch, time, json, os, sys, subprocess
+
+def get_vram_usage_gb():
+    """Get VRAM usage in GB."""
+    try:
+        result = subprocess.run(["rocm-smi", "--showmeminfo", "vram"],
+                              capture_output=True, text=True, timeout=5)
+        for line in result.stdout.split('\n'):
+            if 'VRAM Total Used Memory (B):' in line:
+                return int(line.split(':')[-1].strip()) / (1024**3)
+    except:
+        pass
+    return None
+
+def get_gtt_usage_gb():
+    """Get GTT usage in GB."""
+    try:
+        result = subprocess.run(["rocm-smi", "--showmeminfo", "gtt"],
+                              capture_output=True, text=True, timeout=5)
+        for line in result.stdout.split('\n'):
+            if 'GTT Total Used Memory (B):' in line and 'GPU[0]' in line:
+                return int(line.split(':')[-1].strip()) / (1024**3)
+    except:
+        pass
+    return None
+
+results = {
+    "image": "pytorch-ablation-rocm-gtt-0",
+    "pytorch_version": torch.__version__,
+    "rocm_version": str(torch.version.hip),
+    "ablation_type": "controlled",
+    "ablation_variable": "PYTORCH_ROCM_GTT",
+    "ablation_value": "0",
+    "device": None,
+    "status": "unknown",
+    "memory": {},
+    "benchmarks": {},
+    "env": {
+        "HSA_ENABLE_SDMA": os.environ.get("HSA_ENABLE_SDMA", "unset"),
+        "ROCBLAS_USE_HIPBLASLT": os.environ.get("ROCBLAS_USE_HIPBLASLT", "unset"),
+        "HSA_OVERRIDE_GFX_VERSION": os.environ.get("HSA_OVERRIDE_GFX_VERSION", "unset"),
+        "PYTORCH_ROCM_GTT": "not_installed"
+    }
+}
+
+if not torch.cuda.is_available():
+    results["status"] = "FAIL"
+    results["error"] = "CUDA not available"
+    print(json.dumps(results, indent=2))
+    sys.exit(1)
+
+results["device"] = torch.cuda.get_device_name(0)
+
+try:
+    # Measure memory before loading model
+    vram_before = get_vram_usage_gb()
+    gtt_before = get_gtt_usage_gb()
+
+    results["memory"]["vram_before_gb"] = vram_before
+    results["memory"]["gtt_before_gb"] = gtt_before
+
+    # Load a model to measure allocation
+    print("Loading model...", file=sys.stderr)
+    x = torch.randn(4096, 4096, device='cuda', dtype=torch.float16)
+    torch.cuda.synchronize()
+    time.sleep(1)
+
+    # Measure memory after
+    vram_after = get_vram_usage_gb()
+    gtt_after = get_gtt_usage_gb()
+    pytorch_alloc = torch.cuda.memory_allocated(0) / (1024**3)
+
+    results["memory"]["vram_after_gb"] = vram_after
+    results["memory"]["gtt_after_gb"] = gtt_after
+    results["memory"]["vram_delta_gb"] = vram_after - vram_before if vram_before else None
+    results["memory"]["gtt_delta_gb"] = gtt_after - gtt_before if gtt_before else None
+    results["memory"]["pytorch_allocated_gb"] = pytorch_alloc
+
+    # Determine where model loaded
+    if vram_after and vram_before:
+        vram_delta = vram_after - vram_before
+        if vram_delta >= pytorch_alloc * 0.5:
+            results["memory"]["allocation_location"] = "VRAM"
+        else:
+            results["memory"]["allocation_location"] = "GTT/UMA"
+
+    # Benchmark
+    for size in [2048, 4096, 8192]:
+        a = torch.randn(size, size, device='cuda', dtype=torch.float16)
+        b = torch.randn(size, size, device='cuda', dtype=torch.float16)
+        torch.cuda.synchronize()
+
+        times = []
+        for _ in range(20):
+            start = time.perf_counter()
+            c = torch.mm(a, b)
+            torch.cuda.synchronize()
+            times.append(time.perf_counter() - start)
+
+        elapsed = min(times)
+        tflops = (2 * size**3 / elapsed) / 1e12
+        results["benchmarks"][f"matmul_{size}"] = {
+            "tflops": round(tflops, 2),
+            "time_ms": round(elapsed*1000, 3)
+        }
+
+    results["peak_tflops"] = max(v["tflops"] for v in results["benchmarks"].values())
+    results["status"] = "SUCCESS"
+
+except Exception as e:
+    results["status"] = "FAIL"
+    results["error"] = str(e)
+    import traceback
+    results["traceback"] = traceback.format_exc()
+
+print(json.dumps(results, indent=2))
+EOF
+RUN chmod +x /usr/local/bin/bench-pytorch-vram
+
+CMD ["bench-pytorch-vram"]

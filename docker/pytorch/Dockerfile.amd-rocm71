@@ -1,0 +1,123 @@
+# PyTorch on AMD ROCm 7.1.1 from official AMD repos
+# Tests: Does official AMD ROCm 7.1 work with PyTorch?
+
+ARG FEDORA_VERSION=43
+FROM fedora:${FEDORA_VERSION}
+
+LABEL maintainer="softab"
+LABEL description="PyTorch on AMD ROCm 7.1.1 official repos"
+LABEL ablation.expected_result="UNKNOWN - testing AMD official ROCm 7.1"
+LABEL ablation.rocm_source="amd-repo-7.1.1"
+
+ARG FEDORA_VERSION=43
+ARG GFX_TARGET=gfx1151
+ARG ROCM_VERSION=7.1.1
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Add AMD ROCm repo and install ROCm 7.1.1
+RUN dnf -y update && \
+    dnf -y install 'dnf-command(config-manager)' && \
+    dnf config-manager --add-repo https://repo.radeon.com/rocm/rhel9/7.1.1/main && \
+    rpm --import https://repo.radeon.com/rocm/rocm.gpg.key && \
+    dnf -y install \
+        python3.12 python3.12-devel \
+        rocm-hip-runtime rocm-hip-sdk \
+        gcc gcc-c++ cmake ninja-build \
+        bc jq htop wget libatomic \
+    && dnf clean all && \
+    python3.12 -m ensurepip --upgrade || \
+    (dnf -y install python3.12 python3.12-devel gcc gcc-c++ cmake bc jq htop wget libatomic && \
+     python3.12 -m ensurepip --upgrade)
+
+# Install PyTorch - try TheRock first, fallback to official
+RUN python3.12 -m pip install --upgrade pip && \
+    python3.12 -m pip install numpy && \
+    (python3.12 -m pip install --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ \
+        --pre torch torchvision torchaudio 2>/dev/null || \
+     python3.12 -m pip install torch torchvision torchaudio \
+        --index-url https://download.pytorch.org/whl/rocm6.2)
+
+# Environment for gfx1151
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+ENV TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+ENV HIP_VISIBLE_DEVICES=0
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.0
+
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/bench-pytorch
+#!/usr/bin/env python3.12
+import torch
+import time
+import json
+import os
+
+results = {
+    "pytorch_version": torch.__version__,
+    "rocm_version": str(torch.version.hip),
+    "gfx_override": os.environ.get("HSA_OVERRIDE_GFX_VERSION", "none"),
+    "ablation_type": "amd-rocm-7.1.1",
+    "description": "PyTorch on AMD official ROCm 7.1.1",
+    "device": None,
+    "status": "unknown",
+    "benchmarks": {}
+}
+
+if not torch.cuda.is_available():
+    results["status"] = "FAIL"
+    results["error"] = "CUDA not available"
+    print(json.dumps(results, indent=2))
+    exit(1)
+
+results["device"] = torch.cuda.get_device_name(0)
+
+try:
+    x = torch.randn(2048, 2048, device='cuda', dtype=torch.float16)
+    for _ in range(3):
+        _ = torch.mm(x, x)
+    torch.cuda.synchronize()
+
+    for size in [1024, 2048, 4096, 8192]:
+        a = torch.randn(size, size, device='cuda', dtype=torch.float16)
+        b = torch.randn(size, size, device='cuda', dtype=torch.float16)
+        torch.cuda.synchronize()
+
+        iters = 10
+        start = time.perf_counter()
+        for _ in range(iters):
+            c = torch.mm(a, b)
+        torch.cuda.synchronize()
+        elapsed = (time.perf_counter() - start) / iters
+
+        flops = 2 * size * size * size
+        tflops = (flops / elapsed) / 1e12
+
+        results["benchmarks"][f"matmul_{size}"] = {
+            "tflops": round(tflops, 2),
+            "time_ms": round(elapsed * 1000, 3)
+        }
+
+    peak = max(results["benchmarks"].values(), key=lambda x: x["tflops"])
+    results["peak_tflops"] = peak["tflops"]
+    results["status"] = "SUCCESS"
+
+except Exception as e:
+    results["status"] = "FAIL"
+    results["error"] = str(e)
+
+print(json.dumps(results, indent=2))
+EOF
+RUN chmod +x /usr/local/bin/bench-pytorch
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="pytorch"
+LABEL ablation.source="amd-rocm-7.1.1"
+
+CMD ["bench-pytorch"]

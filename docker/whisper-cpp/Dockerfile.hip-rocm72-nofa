@@ -1,0 +1,81 @@
+# whisper.cpp with ROCm 7.2 HIP - Flash Attention DISABLED
+# Testing performance impact of Flash Attention on whisper workload
+# README.md states flash attention is "enabled by default" but impact is unquantified
+#
+# Run with: podman run --ipc=host --device=/dev/kfd --device=/dev/dri ...
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.2-complete
+
+LABEL maintainer="softab"
+LABEL description="whisper.cpp ROCm 7.2 HIP without Flash Attention"
+LABEL backend="hip"
+LABEL rocm.version="7.2"
+LABEL test.variable="flash_attention=disabled"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build git \
+    ffmpeg \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /whisper.cpp
+
+WORKDIR /whisper.cpp
+
+# Build with Flash Attention disabled at compile time
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_FLASH_ATTN=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip --parallel $(nproc)
+
+RUN ln -sf /whisper.cpp/build-hip/bin/whisper-cli /usr/local/bin/whisper-cli && \
+    ln -sf /whisper.cpp/build-hip/bin/whisper-bench /usr/local/bin/whisper-bench 2>/dev/null || true
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/run-bench
+#!/bin/bash
+AUDIO=${1:-/samples/test_audio.wav}
+MODEL=${2:-/models/ggml-base.en.bin}
+echo "=== whisper.cpp HIP ROCm 7.2 (NO Flash Attention) Benchmark ==="
+echo "Flash Attention: DISABLED (built with -DGGML_FLASH_ATTN=OFF)"
+echo "GFX Target: ${GPU_TARGETS}"
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2
+echo ""
+echo "Audio: $AUDIO"
+echo "Model: $MODEL"
+echo ""
+if [ -f "$AUDIO" ] && [ -f "$MODEL" ]; then
+    time whisper-cli -m "$MODEL" -f "$AUDIO"
+else
+    echo "Files not found"
+    echo "Mount: -v /path/to/models:/models -v /path/to/samples:/samples"
+fi
+EOF
+RUN chmod +x /usr/local/bin/run-bench
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="whisper-cpp"
+LABEL ablation.backend="hip-rocm72-nofa"
+
+CMD ["whisper-cli", "--help"]

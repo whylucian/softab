@@ -1,0 +1,90 @@
+# whisper.cpp with TheRock nightlies (native gfx1151)
+# Using TheRock ROCm SDK instead of system ROCm 6.4.3
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="whisper.cpp with TheRock nightlies for native gfx1151"
+LABEL ablation.expected_result="SUCCESS - 58x speedup target"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install build tools + ffmpeg
+RUN dnf -y update && dnf -y install \
+    cmake ninja-build gcc gcc-c++ git \
+    python3.12 python3.12-devel \
+    ffmpeg \
+    bc jq htop wget \
+    && dnf clean all && \
+    python3.12 -m ensurepip --upgrade
+
+# Install TheRock ROCm SDK with gfx1151 support
+RUN python3.12 -m pip install --upgrade pip && \
+    python3.12 -m pip install --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ --pre \
+    rocm-sdk-core rocm-sdk-libraries-gfx1151
+
+# Set up ROCm environment from TheRock
+ENV ROCM_PATH=/usr/local
+ENV HIP_PATH=/usr/local
+ENV PATH="/usr/local/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+
+# Critical settings
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Clone whisper.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /whisper.cpp
+
+WORKDIR /whisper.cpp
+
+# Download test model
+RUN bash ./models/download-ggml-model.sh base.en
+
+# Build with HIP using TheRock SDK
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip -j$(nproc) || echo "Build may have partial failures"
+
+# Create symlinks if binaries exist
+RUN [ -f build-hip/bin/whisper-cli ] && ln -s /whisper.cpp/build-hip/bin/whisper-cli /usr/local/bin/whisper-cli || true
+
+WORKDIR /workspace
+
+# Benchmark script
+COPY <<'EOF' /usr/local/bin/bench-whisper
+#!/bin/bash
+echo "=== whisper.cpp TheRock HIP Benchmark ==="
+echo "GFX Target: $AMDGPU_TARGETS"
+echo ""
+
+AUDIO=${1:-/whisper.cpp/samples/jfk.wav}
+MODEL=${2:-/whisper.cpp/models/ggml-base.en.bin}
+
+echo "Audio: $AUDIO"
+echo "Model: $MODEL"
+echo ""
+
+if [ -f /whisper.cpp/build-hip/bin/whisper-cli ] && [ -f "$AUDIO" ] && [ -f "$MODEL" ]; then
+    echo "Running transcription..."
+    time /whisper.cpp/build-hip/bin/whisper-cli -m "$MODEL" -f "$AUDIO"
+else
+    echo "whisper-cli or files not found"
+    ls -la /whisper.cpp/build-hip/bin/ 2>/dev/null || echo "No bin directory"
+fi
+EOF
+RUN chmod +x /usr/local/bin/bench-whisper
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="whisper-cpp"
+LABEL ablation.backend="therock-hip"
+
+CMD ["bench-whisper"]

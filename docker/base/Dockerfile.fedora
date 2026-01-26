@@ -1,0 +1,47 @@
+# Base Fedora image for Strix Halo ROCm ablation studies
+# Build args allow parameterization for ablation matrix
+
+ARG FEDORA_VERSION=43
+FROM fedora:${FEDORA_VERSION}
+
+LABEL maintainer="softab"
+LABEL description="Base Fedora image for ROCm ablation studies on Strix Halo (gfx1151)"
+
+# Build args
+ARG FEDORA_VERSION=43
+
+# Environment
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Common development tools
+RUN dnf -y update && dnf -y install \
+    # Build essentials
+    gcc gcc-c++ clang cmake ninja-build make \
+    git wget curl \
+    # Python
+    python3 python3-pip python3-devel \
+    # Libraries
+    openssl-devel zlib-devel libffi-devel \
+    # Vulkan base (always useful)
+    vulkan-loader vulkan-headers vulkan-tools \
+    # Utilities
+    bc jq htop \
+    # ROCm dependencies
+    numactl-devel libdrm-devel \
+    && dnf clean all
+
+# Create non-root user for builds
+RUN useradd -m -s /bin/bash builder && \
+    usermod -a -G video,render builder
+
+# Environment for builds
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+
+WORKDIR /workspace
+
+# Labels for ablation tracking
+LABEL fedora.version="${FEDORA_VERSION}"
+LABEL ablation.type="base"

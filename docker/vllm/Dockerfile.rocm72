@@ -1,0 +1,95 @@
+# vLLM with ROCm 7.2 for Strix Halo gfx1151
+# ROCm 7.2 has native gfx1151 support
+#
+# Run with: podman run --ipc=host --device=/dev/kfd --device=/dev/dri ...
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.2-complete
+
+LABEL maintainer="softab"
+LABEL description="vLLM ROCm 7.2 for Strix Halo gfx1151"
+LABEL rocm.version="7.2"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install Python and build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.12 python3.12-venv python3-pip \
+    build-essential cmake ninja-build git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+
+# Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+
+# Create venv
+RUN python3.12 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install PyTorch ROCm
+RUN pip install --upgrade pip && \
+    pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.2
+
+# Install vLLM
+RUN pip install vllm
+
+WORKDIR /workspace
+
+# Test script
+COPY <<'SCRIPT' /usr/local/bin/test-vllm
+#!/bin/bash
+echo "=== vLLM ROCm 7.2 Test ==="
+echo "ROCm: $(cat /opt/rocm/.info/version 2>/dev/null || echo unknown)"
+python3 -c "import vllm; print('vLLM version:', vllm.__version__)"
+python3 -c "import torch; print('PyTorch:', torch.__version__)"
+python3 -c "import torch; print('ROCm available:', torch.cuda.is_available())"
+python3 -c "import torch; print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A')"
+SCRIPT
+RUN chmod +x /usr/local/bin/test-vllm
+
+# Benchmark script
+COPY <<'BENCH' /usr/local/bin/run-bench
+#!/bin/bash
+MODEL=${1:-/models/test.gguf}
+echo "=== vLLM Benchmark ==="
+echo "Note: vLLM uses safetensors/HF format, not GGUF"
+echo "Mount HuggingFace models with: -v ~/.cache/huggingface:/root/.cache/huggingface"
+python3 -c "
+from vllm import LLM, SamplingParams
+import time
+
+# Use a small model for testing
+model_name = 'TinyLlama/TinyLlama-1.1B-Chat-v1.0'
+print(f'Loading {model_name}...')
+
+try:
+    llm = LLM(model=model_name, gpu_memory_utilization=0.8)
+
+    prompts = ['Hello, my name is'] * 10
+    sampling_params = SamplingParams(temperature=0.8, max_tokens=100)
+
+    start = time.time()
+    outputs = llm.generate(prompts, sampling_params)
+    elapsed = time.time() - start
+
+    total_tokens = sum(len(o.outputs[0].token_ids) for o in outputs)
+    print(f'Generated {total_tokens} tokens in {elapsed:.2f}s')
+    print(f'Throughput: {total_tokens/elapsed:.2f} tok/s')
+except Exception as e:
+    print(f'Error: {e}')
+"
+BENCH
+RUN chmod +x /usr/local/bin/run-bench
+
+LABEL ablation.type="vllm"
+LABEL ablation.backend="rocm72"
+
+CMD ["test-vllm"]

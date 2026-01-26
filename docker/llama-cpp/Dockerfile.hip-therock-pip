@@ -1,0 +1,113 @@
+# llama.cpp with TheRock ROCm libraries (pip-based)
+# Uses TheRock pip packages for native gfx1151 support
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp built against TheRock ROCm pip libraries"
+LABEL backend="hip"
+LABEL rocm.source="therock-pip"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install build tools and dependencies
+# NOTE: libatomic required by TheRock pip packages
+RUN dnf -y update && dnf -y install \
+    python3.12 python3.12-devel \
+    gcc gcc-c++ cmake ninja-build git \
+    bc jq htop wget \
+    numactl libdrm mesa-libGL libatomic \
+    clang clang-devel llvm llvm-devel lld \
+    rocm-hip-devel rocminfo \
+    && dnf clean all
+
+# Install TheRock ROCm SDK via pip (native gfx1151 support)
+RUN python3.12 -m ensurepip --upgrade && \
+    python3.12 -m pip install --upgrade pip && \
+    python3.12 -m pip install --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ \
+        rocm-sdk-core rocm-sdk-libraries-gfx1151
+
+# Set up paths for TheRock ROCm
+ENV PATH="/usr/local/bin:${PATH}"
+ENV ROCM_PATH="/usr/local/lib/python3.12/site-packages/rocm_sdk_core"
+ENV HIP_PATH="${ROCM_PATH}"
+
+# Strix Halo settings - NO override for native gfx1151
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+
+# GFX target
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Clone llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Find TheRock HIP libraries and build
+# TheRock installs libraries under site-packages
+RUN THEROCK_LIB=$(python3.12 -c "import rocm_sdk_core; print(rocm_sdk_core.__path__[0])") && \
+    echo "TheRock path: $THEROCK_LIB" && \
+    export LD_LIBRARY_PATH="$THEROCK_LIB/lib:$LD_LIBRARY_PATH" && \
+    export CMAKE_PREFIX_PATH="$THEROCK_LIB:$CMAKE_PREFIX_PATH" && \
+    cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_HIP_UMA=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH="$THEROCK_LIB" \
+    -G Ninja && \
+    cmake --build build-hip --parallel $(nproc) || \
+    echo "Build failed - checking what we have"
+
+# Create symlinks if build succeeded
+RUN if [ -f /llama.cpp/build-hip/bin/llama-cli ]; then \
+        ln -sf /llama.cpp/build-hip/bin/llama-cli /usr/local/bin/llama-cli && \
+        ln -sf /llama.cpp/build-hip/bin/llama-bench /usr/local/bin/llama-bench && \
+        ln -sf /llama.cpp/build-hip/bin/llama-server /usr/local/bin/llama-server; \
+    else \
+        echo "WARNING: llama-cli not built"; \
+    fi
+
+ENV GGML_CUDA_ENABLE_UNIFIED_MEMORY=ON
+
+WORKDIR /workspace
+
+# Benchmark script
+COPY <<'EOF' /usr/local/bin/run-bench
+#!/bin/bash
+MODEL=${1:-/models/test.gguf}
+echo "=== llama.cpp TheRock HIP Benchmark ==="
+echo "GFX Target: ${GPU_TARGETS}"
+echo "ROCBLAS_USE_HIPBLASLT: ${ROCBLAS_USE_HIPBLASLT}"
+
+# Set up TheRock library path
+THEROCK_LIB=$(python3.12 -c "import rocm_sdk_core; print(rocm_sdk_core.__path__[0])" 2>/dev/null)
+export LD_LIBRARY_PATH="$THEROCK_LIB/lib:$LD_LIBRARY_PATH"
+
+echo "Model: $MODEL"
+echo ""
+if [ -f "$MODEL" ]; then
+    if command -v llama-bench &> /dev/null; then
+        llama-bench --mmap 0 -ngl 999 -m "$MODEL" -p 512,1024,2048 -n 32
+    else
+        echo "llama-bench not found - build may have failed"
+        ls -la /llama.cpp/build-hip/bin/ 2>/dev/null || echo "No bin directory"
+    fi
+else
+    echo "Model not found: $MODEL"
+    echo "Mount models with: -v /path/to/models:/models"
+fi
+EOF
+RUN chmod +x /usr/local/bin/run-bench
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="hip-therock-pip"
+
+CMD ["run-bench"]

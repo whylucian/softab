@@ -1,0 +1,143 @@
+# pyannote-audio with ROCm 6.2 PyTorch (minimal, no torchvision conflicts)
+# Avoids torchvision dependency issues by not installing it
+#
+# Usage:
+#   podman build -f docker/pyannote/Dockerfile.rocm62-minimal \
+#     -t softab:pyannote-rocm62-minimal-gfx1151 .
+#
+#   podman run --rm --device=/dev/kfd --device=/dev/dri --ipc=host \
+#     -e HF_TOKEN=$HF_TOKEN \
+#     softab:pyannote-rocm62-minimal-gfx1151 python3 test_diarization.py
+
+FROM ubuntu:24.04
+
+LABEL maintainer="softab"
+LABEL description="pyannote-audio minimal ROCm 6.2 PyTorch (no torchvision)"
+LABEL backend="pytorch-rocm"
+LABEL rocm.version="6.2"
+LABEL python.version="3.12"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.12, ffmpeg, and essentials
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-dev \
+    python3-venv \
+    ffmpeg \
+    git \
+    wget \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Strix Halo settings
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.0
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV PYTORCH_ROCM_ARCH="gfx1151"
+ENV ROCBLAS_USE_HIPBLASLT=1
+
+# Install PyTorch for ROCm 6.2 (torch only, no torchvision)
+RUN pip3 install --break-system-packages --no-cache-dir \
+    torch torchaudio \
+    --index-url https://download.pytorch.org/whl/rocm6.2
+
+# Install pyannote-audio with all dependencies
+# Use 3.4.0 but install dependencies manually to avoid torchvision conflicts
+RUN pip3 install --break-system-packages --no-cache-dir \
+    einops \
+    asteroid-filterbanks \
+    librosa \
+    soundfile \
+    numpy \
+    scipy \
+    huggingface-hub \
+    omegaconf \
+    "pytorch-metric-learning>=2.0" \
+    semver \
+    typing-extensions \
+    pytorch-lightning \
+    pyannote.core \
+    pyannote.database \
+    pyannote.pipeline \
+    pyannote.metrics
+
+# Now install pyannote.audio
+RUN pip3 install --break-system-packages --no-cache-dir \
+    "pyannote.audio==3.4.0"
+
+WORKDIR /workspace
+
+# Create test script
+COPY <<'EOF' /workspace/test_diarization.py
+#!/usr/bin/env python3
+"""Minimal test script for pyannote-audio on AMD ROCm"""
+import os
+import sys
+import torch
+
+def main():
+    print("=== pyannote-audio ROCm 6.2 Minimal Test ===")
+    print(f"Python: {sys.version}")
+    print(f"PyTorch: {torch.__version__}")
+    print(f"ROCm: {torch.version.hip if hasattr(torch.version, 'hip') else 'N/A'}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+
+    if torch.cuda.is_available():
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+
+    # Try importing pyannote
+    try:
+        import pyannote.audio
+        print(f"pyannote.audio: {pyannote.audio.__version__}")
+    except ImportError as e:
+        print(f"ERROR importing pyannote.audio: {e}")
+        return 1
+
+    # Check for HuggingFace token
+    hf_token = os.environ.get('HF_TOKEN')
+    if not hf_token:
+        print("\nWARNING: HF_TOKEN not set (skipping pipeline test)")
+        print("Set HF_TOKEN to test full pipeline loading")
+        return 0
+
+    # Try loading pipeline
+    try:
+        from pyannote.audio import Pipeline
+        print("\nLoading speaker-diarization-3.1 pipeline...")
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1",
+            use_auth_token=hf_token
+        )
+        print("Pipeline loaded successfully!")
+
+        if torch.cuda.is_available():
+            print("Moving pipeline to GPU...")
+            pipeline.to(torch.device("cuda"))
+            print("Pipeline on GPU!")
+
+        print("\nTest completed successfully!")
+        return 0
+
+    except Exception as e:
+        print(f"\nERROR loading pipeline: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
+EOF
+
+RUN chmod +x /workspace/test_diarization.py
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="pyannote-audio"
+LABEL ablation.backend="pytorch-rocm62-minimal"
+
+CMD ["python3", "test_diarization.py"]

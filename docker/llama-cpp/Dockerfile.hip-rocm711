@@ -1,0 +1,84 @@
+# llama.cpp with ROCm 7.1.1 HIP backend
+# Testing ROCm 7.1.1 for gfx1151 support
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.1.1-complete
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp ROCm 7.1.1 HIP build for Strix Halo"
+LABEL backend="hip"
+LABEL rocm.version="7.1.1"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build git \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+
+# GFX target
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Clone llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Build with HIP
+RUN HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
+    cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_HIP_UMA=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip --parallel $(nproc)
+
+# Create symlinks
+RUN ln -sf /llama.cpp/build-hip/bin/llama-cli /usr/local/bin/llama-cli && \
+    ln -sf /llama.cpp/build-hip/bin/llama-bench /usr/local/bin/llama-bench && \
+    ln -sf /llama.cpp/build-hip/bin/llama-server /usr/local/bin/llama-server
+
+ENV GGML_CUDA_ENABLE_UNIFIED_MEMORY=ON
+
+WORKDIR /workspace
+
+# Benchmark script
+COPY <<'EOF' /usr/local/bin/run-bench
+#!/bin/bash
+MODEL=${1:-/models/test.gguf}
+echo "=== llama.cpp HIP ROCm 7.1.1 Benchmark ==="
+echo "GFX Target: ${GPU_TARGETS}"
+echo "ROCm: $(cat /opt/rocm/.info/version 2>/dev/null || echo unknown)"
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2
+echo ""
+if [ -f "$MODEL" ]; then
+    llama-bench --mmap 0 -ngl 999 -m "$MODEL" -p 512,1024,2048 -n 32
+else
+    echo "Model not found: $MODEL"
+    echo "Mount models with: -v /path/to/models:/models"
+fi
+EOF
+RUN chmod +x /usr/local/bin/run-bench
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="hip-rocm711"
+
+CMD ["llama-cli", "--help"]

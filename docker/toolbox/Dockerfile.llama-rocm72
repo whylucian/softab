@@ -1,0 +1,144 @@
+# Fedora Toolbox for llama.cpp with ROCm 7.2 HIP
+# Compatible with: toolbox create / distrobox create
+# Inspired by kyuz0's amd-strix-halo-toolboxes
+# CRITICAL: Must run with --ipc=host for Strix Halo unified memory
+
+FROM registry.fedoraproject.org/fedora-toolbox:43
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp ROCm 7.2 HIP Toolbox for Strix Halo"
+LABEL usage="toolbox create llama-rocm --image IMAGE -- --device /dev/dri --device /dev/kfd --ipc=host"
+LABEL backend="hip-rocm72"
+LABEL ablation.type="toolbox"
+LABEL reference="kyuz0/amd-strix-halo-toolboxes"
+LABEL critical.flag="--ipc=host required"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Add ROCm repository (using TheRock nightlies for ROCm 7.2)
+# Note: Official Fedora doesn't have ROCm 7.2 yet, so we install build deps only
+RUN dnf install -y \
+    gcc gcc-c++ cmake ninja-build git \
+    bc jq htop vim nano \
+    wget curl file \
+    && dnf clean all
+
+# Download and extract ROCm 7.2 (minimal HIP runtime)
+# For toolbox, we'll use distrobox approach: bind mount host ROCm or download tarball
+RUN mkdir -p /opt/rocm && \
+    echo "Note: For full ROCm 7.2, bind mount host /opt/rocm or install AMD packages" > /opt/rocm/README
+
+# Clone llama.cpp (will build when ROCm available)
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp
+
+# Build script (executed by user when ROCm is available)
+RUN echo '#!/bin/bash\n\
+if [ ! -d "/opt/rocm/bin" ]; then\n\
+    echo "ERROR: ROCm not found at /opt/rocm"\n\
+    echo ""\n\
+    echo "To use this toolbox:"\n\
+    echo "1. Install ROCm 7.2 on host: https://rocm.docs.amd.com/"\n\
+    echo "2. Or bind mount host ROCm: --volume /opt/rocm:/opt/rocm:ro"\n\
+    exit 1\n\
+fi\n\
+\n\
+cd /opt/llama.cpp\n\
+echo "Building llama.cpp with ROCm 7.2 HIP..."\n\
+export PATH="/opt/rocm/bin:${PATH}"\n\
+export ROCM_PATH="/opt/rocm"\n\
+cmake -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1151 -DCMAKE_BUILD_TYPE=Release\n\
+cmake --build build --parallel $(nproc)\n\
+\n\
+# Create symlinks\n\
+sudo ln -sf /opt/llama.cpp/build/bin/llama-cli /usr/local/bin/llama-cli\n\
+sudo ln -sf /opt/llama.cpp/build/bin/llama-bench /usr/local/bin/llama-bench\n\
+sudo ln -sf /opt/llama.cpp/build/bin/llama-server /usr/local/bin/llama-server\n\
+\n\
+echo "Build complete!"\n\
+' > /usr/local/bin/build-llama && chmod +x /usr/local/bin/build-llama
+
+# Environment setup script
+RUN echo '#!/bin/bash\n\
+# ROCm environment for Strix Halo\n\
+export PATH="/opt/rocm/bin:${PATH}"\n\
+export LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"\n\
+export ROCM_PATH="/opt/rocm"\n\
+export HIP_PATH="/opt/rocm"\n\
+\n\
+# Critical Strix Halo settings (kyuz0 + SoftAb findings)\n\
+export HSA_ENABLE_SDMA=0\n\
+export ROCBLAS_USE_HIPBLASLT=1\n\
+export HIP_VISIBLE_DEVICES=0\n\
+export GGML_CUDA_ENABLE_UNIFIED_MEMORY=ON\n\
+\n\
+echo "ROCm environment configured for Strix Halo"\n\
+' > /etc/profile.d/rocm-strix-halo.sh && chmod +x /etc/profile.d/rocm-strix-halo.sh
+
+# Helper script with kyuz0 critical flags
+RUN echo '#!/bin/bash\n\
+source /etc/profile.d/rocm-strix-halo.sh\n\
+\n\
+MODEL="${1}"\n\
+if [ -z "$MODEL" ]; then\n\
+    echo "Usage: llama-run <model.gguf> [additional args]"\n\
+    echo ""\n\
+    echo "This wrapper automatically adds critical Strix Halo flags:"\n\
+    echo "  --no-mmap    (prevents catastrophic slowdown)"\n\
+    echo "  -ngl 999     (load all layers to GPU)"\n\
+    echo "  -fa 1        (enable flash attention)"\n\
+    exit 1\n\
+fi\n\
+shift\n\
+\n\
+echo "Running llama.cpp HIP with Strix Halo optimizations..."\n\
+exec llama-cli --no-mmap -ngl 999 -fa 1 -m "$MODEL" "$@"\n\
+' > /usr/local/bin/llama-run && chmod +x /usr/local/bin/llama-run
+
+# README
+RUN echo "# llama.cpp ROCm 7.2 HIP Toolbox\n\
+\n\
+## Setup\n\
+\n\
+1. Install ROCm 7.2 on host or bind mount existing installation\n\
+2. Build llama.cpp: \`build-llama\`\n\
+3. Run inference: \`llama-run /path/to/model.gguf\`\n\
+\n\
+## Critical: --ipc=host Required\n\
+\n\
+Strix Halo unified memory requires \`--ipc=host\` flag:\n\
+\n\
+\`\`\`bash\n\
+toolbox create llama-rocm \\\\\n\
+  --image IMAGE \\\\\n\
+  -- --device /dev/dri --device /dev/kfd --ipc=host\n\
+\`\`\`\n\
+\n\
+Without this flag, you'll see:\n\
+\`Memory critical error by agent node-0\`\n\
+\n\
+## Critical Flags\n\
+\n\
+Always use (kyuz0 + SoftAb recommendation):\n\
+- \`--no-mmap\` - Mandatory for ROCm\n\
+- \`-ngl 999\` - All layers to GPU  \n\
+- \`-fa 1\` - Flash attention\n\
+\n\
+## Performance\n\
+\n\
+Expected on Strix Halo (Radeon 8060S):\n\
+- Prompt processing (pp512): ~4700 t/s (HIP)\n\
+- Token generation (tg32): ~191 t/s (HIP)\n\
+\n\
+Note: Vulkan is faster (~5300 t/s pp) but HIP better for long context.\n\
+" > /opt/README.md
+
+WORKDIR /workspace
+
+# Toolbox compatibility labels
+LABEL com.github.containers.toolbox="true"
+LABEL com.github.debarshiray.toolbox="true"
+
+CMD ["/bin/bash"]

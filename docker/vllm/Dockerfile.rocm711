@@ -1,0 +1,84 @@
+# vLLM with ROCm 7.1.1
+# Testing vLLM on ROCm 7.1.1 GA release
+# Expected better gfx1151 support than 6.4.x
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.1.1-complete
+
+LABEL maintainer="softab"
+LABEL description="vLLM ROCm 7.1.1 for Strix Halo ablation"
+LABEL backend="hip"
+LABEL rocm.version="7.1.1"
+LABEL ablation.type="vllm-rocm-version"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.11 and build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-dev python3.11-venv python3-pip \
+    build-essential cmake ninja-build git \
+    curl wget ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python 3.11 as default
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# ROCm environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Critical Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+
+# GFX target
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Create venv
+RUN python3.11 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# Install vLLM
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir \
+    torch torchvision --index-url https://download.pytorch.org/whl/rocm6.2 && \
+    pip install --no-cache-dir vllm || \
+    (echo "vLLM wheel install failed, attempting source build..." && \
+     git clone https://github.com/vllm-project/vllm.git /tmp/vllm && \
+     cd /tmp/vllm && \
+     pip install -e . && \
+     cd / && rm -rf /tmp/vllm)
+
+# User setup
+RUN useradd -m -s /bin/bash runner && \
+    usermod -a -G video,render runner
+
+WORKDIR /workspace
+
+# Test script
+RUN echo '#!/bin/bash\n\
+echo "=== vLLM ROCm 7.1.1 Test ==="\n\
+echo "ROCm Version: 7.1.1 (GA)"\n\
+echo "GFX Target: ${GPU_TARGETS}"\n\
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2\n\
+echo ""\n\
+python3 -c "import vllm; print(f\"vLLM version: {vllm.__version__}\")" || echo "vLLM import failed"\n\
+python3 -c "import torch; print(f\"PyTorch ROCm: {torch.version.hip}\")" || echo "PyTorch check failed"\n\
+echo ""\n\
+echo "Run with: podman run --ipc=host --device=/dev/kfd --device=/dev/dri ..."\n\
+' > /usr/local/bin/run-test && chmod +x /usr/local/bin/run-test
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.backend="vllm-rocm711"
+LABEL base.image="rocm/dev-ubuntu-24.04:7.1.1-complete"
+
+CMD ["/bin/bash"]

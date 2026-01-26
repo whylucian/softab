@@ -1,0 +1,119 @@
+# PyTorch version mismatch: Backward compatibility test
+# PyTorch built for ROCm 6.2 running on ROCm 7.x runtime (TheRock)
+# Tests: Can older PyTorch wheels work on newer ROCm runtime?
+
+ARG FEDORA_VERSION=43
+FROM fedora:${FEDORA_VERSION}
+
+LABEL maintainer="softab"
+LABEL description="PyTorch ROCm 6.2 wheels on TheRock ROCm 7.x runtime (backward compat mismatch)"
+LABEL ablation.expected_result="UNKNOWN - testing backward compatibility"
+LABEL ablation.mismatch="pytorch-rocm6.2-on-runtime-rocm7.x"
+
+ARG FEDORA_VERSION=43
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install TheRock ROCm 7.x runtime (newer)
+RUN dnf -y update && dnf -y install \
+    python3.12 python3.12-devel \
+    gcc gcc-c++ cmake ninja-build \
+    bc jq htop wget \
+    && dnf clean all && \
+    python3.12 -m ensurepip --upgrade
+
+# Install TheRock ROCm packages (7.x)
+RUN python3.12 -m pip install --upgrade pip && \
+    python3.12 -m pip install numpy && \
+    python3.12 -m pip install --index-url https://rocm.nightlies.amd.com/v2/gfx1151/ \
+        rocm-sdk-core rocm-sdk-libraries-gfx1151 2>/dev/null || true
+
+# Install PyTorch from official ROCm 6.2 wheels (older, stable)
+# This creates the mismatch: PyTorch expects 6.2, runtime is 7.x
+RUN python3.12 -m pip install torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/rocm6.2
+
+# Environment for gfx1151
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+ENV TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
+ENV HIP_VISIBLE_DEVICES=0
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.0
+
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/bench-pytorch
+#!/usr/bin/env python3.12
+import torch
+import time
+import json
+import os
+
+results = {
+    "pytorch_version": torch.__version__,
+    "rocm_version": str(torch.version.hip),
+    "gfx_override": os.environ.get("HSA_OVERRIDE_GFX_VERSION", "none"),
+    "ablation_type": "mismatch-backward",
+    "description": "PyTorch built for older ROCm on newer runtime",
+    "device": None,
+    "status": "unknown",
+    "benchmarks": {}
+}
+
+if not torch.cuda.is_available():
+    results["status"] = "FAIL"
+    results["error"] = "CUDA not available"
+    print(json.dumps(results, indent=2))
+    exit(1)
+
+results["device"] = torch.cuda.get_device_name(0)
+
+try:
+    x = torch.randn(2048, 2048, device='cuda', dtype=torch.float16)
+    for _ in range(3):
+        _ = torch.mm(x, x)
+    torch.cuda.synchronize()
+
+    for size in [1024, 2048, 4096, 8192]:
+        a = torch.randn(size, size, device='cuda', dtype=torch.float16)
+        b = torch.randn(size, size, device='cuda', dtype=torch.float16)
+        torch.cuda.synchronize()
+
+        iters = 10
+        start = time.perf_counter()
+        for _ in range(iters):
+            c = torch.mm(a, b)
+        torch.cuda.synchronize()
+        elapsed = (time.perf_counter() - start) / iters
+
+        flops = 2 * size * size * size
+        tflops = (flops / elapsed) / 1e12
+
+        results["benchmarks"][f"matmul_{size}"] = {
+            "tflops": round(tflops, 2),
+            "time_ms": round(elapsed * 1000, 3)
+        }
+
+    peak = max(results["benchmarks"].values(), key=lambda x: x["tflops"])
+    results["peak_tflops"] = peak["tflops"]
+    results["status"] = "SUCCESS"
+
+except Exception as e:
+    results["status"] = "FAIL"
+    results["error"] = str(e)
+
+print(json.dumps(results, indent=2))
+EOF
+RUN chmod +x /usr/local/bin/bench-pytorch
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="pytorch"
+LABEL ablation.source="mismatch-backward"
+
+CMD ["bench-pytorch"]
