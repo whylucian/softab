@@ -1,0 +1,122 @@
+# Fedora Toolbox for whisper.cpp with Vulkan (RADV)
+# Compatible with: toolbox create / distrobox create
+# Run with: --device /dev/dri --group-add video --security-opt seccomp=unconfined
+
+FROM registry.fedoraproject.org/fedora-toolbox:43
+
+LABEL maintainer="softab"
+LABEL description="whisper.cpp Vulkan RADV Toolbox for Strix Halo"
+LABEL usage="toolbox create whisper-vulkan --image IMAGE -- --device /dev/dri --group-add video"
+LABEL backend="vulkan-radv"
+LABEL ablation.type="toolbox"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install Vulkan, build tools, and ffmpeg
+RUN dnf install -y \
+    vulkan-loader vulkan-tools mesa-vulkan-drivers \
+    vulkan-headers vulkan-validation-layers vulkan-devel \
+    glslc glslang spirv-tools \
+    gcc gcc-c++ cmake ninja-build git \
+    ffmpeg \
+    bc jq htop vim nano \
+    wget curl file \
+    && dnf clean all
+
+# Ensure RADV is the default driver (not AMDVLK)
+RUN echo "AMD_VULKAN_ICD=RADV" >> /etc/environment
+
+# Clone and build whisper.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /opt/whisper.cpp && \
+    cd /opt/whisper.cpp && \
+    cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -G Ninja && \
+    cmake --build build --parallel $(nproc)
+
+# Create symlinks
+RUN ln -s /opt/whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli && \
+    ln -s /opt/whisper.cpp/build/bin/whisper-bench /usr/local/bin/whisper-bench 2>/dev/null || true
+
+# Helper script for running whisper
+RUN echo '#!/bin/bash\n\
+# whisper.cpp wrapper for Strix Halo\n\
+\n\
+MODEL="${1}"\n\
+AUDIO="${2}"\n\
+\n\
+if [ -z "$MODEL" ] || [ -z "$AUDIO" ]; then\n\
+    echo "Usage: whisper-run <model.bin> <audio.wav> [additional args]"\n\
+    echo ""\n\
+    echo "Example:"\n\
+    echo "  whisper-run /data/models/ggml-base.en.bin /data/audio/test.wav"\n\
+    echo ""\n\
+    echo "Models: ggml-tiny.en.bin, ggml-base.en.bin, ggml-small.en.bin, ggml-medium.en.bin, ggml-large-v3.bin"\n\
+    exit 1\n\
+fi\n\
+shift 2\n\
+\n\
+echo "Running whisper.cpp with Vulkan RADV..."\n\
+exec whisper-cli -m "$MODEL" -f "$AUDIO" "$@"\n\
+' > /usr/local/bin/whisper-run && chmod +x /usr/local/bin/whisper-run
+
+# Benchmark helper
+RUN echo '#!/bin/bash\n\
+MODEL="${1}"\n\
+AUDIO="${2}"\n\
+\n\
+if [ -z "$MODEL" ] || [ -z "$AUDIO" ]; then\n\
+    echo "Usage: whisper-bench-run <model.bin> <audio.wav>"\n\
+    exit 1\n\
+fi\n\
+\n\
+echo "=== whisper.cpp Vulkan (RADV) Benchmark ==="\n\
+echo "Driver: RADV (Mesa)"\n\
+vulkaninfo --summary 2>/dev/null | grep -E "(deviceName|driverName)" | head -4\n\
+echo ""\n\
+echo "Model: $MODEL"\n\
+echo "Audio: $AUDIO"\n\
+DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$AUDIO" 2>/dev/null || echo "unknown")\n\
+echo "Audio duration: ${DURATION}s"\n\
+echo ""\n\
+echo "Running transcription..."\n\
+START=$(date +%s.%N)\n\
+whisper-cli -m "$MODEL" -f "$AUDIO" 2>&1\n\
+END=$(date +%s.%N)\n\
+ELAPSED=$(echo "$END - $START" | bc)\n\
+echo ""\n\
+echo "=== Results ==="\n\
+echo "Transcription time: ${ELAPSED}s"\n\
+if [ "$DURATION" != "unknown" ]; then\n\
+    RATIO=$(echo "scale=2; $DURATION / $ELAPSED" | bc)\n\
+    echo "Speed: ${RATIO}x realtime"\n\
+fi\n\
+' > /usr/local/bin/whisper-bench-run && chmod +x /usr/local/bin/whisper-bench-run
+
+# Model download helper
+RUN echo '#!/bin/bash\n\
+MODEL="${1:-base.en}"\n\
+DEST="${2:-/data/models}"\n\
+\n\
+echo "Downloading whisper model: $MODEL"\n\
+echo "Destination: $DEST"\n\
+mkdir -p "$DEST"\n\
+\n\
+case "$MODEL" in\n\
+    tiny|tiny.en|base|base.en|small|small.en|medium|medium.en|large-v3)\n\
+        wget -c "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${MODEL}.bin" -O "$DEST/ggml-${MODEL}.bin"\n\
+        ;;\n\
+    *)\n\
+        echo "Unknown model: $MODEL"\n\
+        echo "Available: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large-v3"\n\
+        exit 1\n\
+        ;;\n\
+esac\n\
+' > /usr/local/bin/whisper-download-model && chmod +x /usr/local/bin/whisper-download-model
+
+WORKDIR /workspace
+
+# Toolbox compatibility labels
+LABEL com.github.containers.toolbox="true"
+LABEL com.github.debarshiray.toolbox="true"
+
+CMD ["/bin/bash"]

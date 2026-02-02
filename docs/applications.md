@@ -255,6 +255,14 @@ gaia --help
 
 **Caveat**: Linux = Vulkan/iGPU only, NPU hybrid mode is Windows-only.
 
+### NPU vs GPU for LLM Inference
+
+**From AMD Lemonade developer** (https://github.com/lemonade-sdk/lemonade/issues/5#issuecomment-3096694964):
+
+> "On Strix Halo I would not expect a performance benefit from NPU vs. GPU. On that platform I would suggest using the NPU for LLMs when the GPU is already busy with something else, for example the NPU runs an AI gaming assistant while the GPU runs the game."
+
+**Takeaway**: Don't expect NPU to speed up LLM inference. Use NPU when GPU is occupied with other workloads (gaming, rendering, etc.).
+
 ### Lemonade Server (AMD Official)
 
 | Resource | URL |

@@ -1,0 +1,103 @@
+# llama.cpp HIP with gfx1100 override (potentially 2x faster, but risky)
+# From Reddit: "gfx1100 kernels can be up to 2X faster than gfx1151 kernels"
+# WARNING: May cause occasional system hangs requiring reboot
+#
+# Build: podman build -t softab:llama-gfx1100-override -f Dockerfile.hip-gfx1100-override .
+# Run:   podman run --device /dev/kfd --device /dev/dri -v ~/models:/models -e MODEL=/models/test.gguf softab:llama-gfx1100-override
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.2-complete
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp HIP with gfx1100 override (2x faster but risky)"
+LABEL ablation.type="llama-cpp"
+LABEL ablation.variable="HSA_OVERRIDE_GFX_VERSION"
+LABEL ablation.value="11.0.0"
+LABEL ablation.warning="May cause system hangs - save work before testing"
+LABEL ablation.note="Tests claim from Reddit that gfx1100 kernels are 2x faster"
+
+# Build for gfx1100 to use those kernels
+ARG GFX_TARGET=gfx1100
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build git \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# THE KEY OVERRIDE - makes gfx1151 hardware use gfx1100 kernels
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.0
+
+# Other Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+
+# GFX target - build for gfx1100
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Clone llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Build with HIP targeting gfx1100
+RUN HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
+    cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_HIP_UMA=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip --parallel $(nproc)
+
+# Create symlinks
+RUN ln -sf /llama.cpp/build-hip/bin/llama-cli /usr/local/bin/llama-cli && \
+    ln -sf /llama.cpp/build-hip/bin/llama-bench /usr/local/bin/llama-bench
+
+WORKDIR /workspace
+
+# Benchmark script with warning
+COPY <<'EOF' /usr/local/bin/bench-llama
+#!/bin/bash
+echo "=== llama.cpp gfx1100 Override Benchmark ==="
+echo ""
+echo "WARNING: This configuration may cause system hangs!"
+echo "         Save your work before running extended benchmarks."
+echo ""
+echo "HSA_OVERRIDE_GFX_VERSION: $HSA_OVERRIDE_GFX_VERSION"
+echo "Build GFX Target: gfx1100 (running on gfx1151 hardware)"
+echo "ROCBLAS_USE_HIPBLASLT: $ROCBLAS_USE_HIPBLASLT"
+echo "ROCm: $(cat /opt/rocm/.info/version 2>/dev/null || echo unknown)"
+echo ""
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2
+echo ""
+
+if [ -z "$MODEL" ]; then
+    echo "Set MODEL=/path/to/model.gguf"
+    exit 1
+fi
+
+echo "Model: $MODEL"
+echo ""
+echo "Starting benchmark (Ctrl+C to abort if system becomes unstable)..."
+echo ""
+
+llama-bench -m "$MODEL" --mmap 0 -ngl 999 -fa 1 -p 512 -n 128
+EOF
+RUN chmod +x /usr/local/bin/bench-llama
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.backend="hip-gfx1100-override"
+
+CMD ["bench-llama"]

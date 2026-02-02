@@ -89,6 +89,59 @@ pytorch-bench
 jupyter notebook --ip=0.0.0.0 --no-browser
 ```
 
+### 4. whisper.cpp Vulkan (RADV) - **Recommended for Speech Recognition**
+
+**Performance**: ~58x realtime (comparable to HIP)
+
+```bash
+# Build
+podman build -t softab-toolbox:whisper-vulkan-radv \
+  -f docker/toolbox/Dockerfile.whisper-vulkan-radv .
+
+# Create toolbox
+toolbox create whisper-vulkan \
+  --image localhost/softab-toolbox:whisper-vulkan-radv \
+  -- --device /dev/dri --group-add video --security-opt seccomp=unconfined
+
+# Enter
+toolbox enter whisper-vulkan
+
+# Download model (if needed)
+whisper-download-model base.en /data/models
+
+# Run transcription
+whisper-run /data/models/ggml-base.en.bin /path/to/audio.wav
+
+# Benchmark
+whisper-bench-run /data/models/ggml-base.en.bin /path/to/audio.wav
+```
+
+### 5. whisper.cpp ROCm 7.2 HIP
+
+**Performance**: 58x realtime (5.14s for 300s audio)
+
+**CRITICAL**: Requires `--ipc=host` for Strix Halo unified memory!
+
+```bash
+# Build
+podman build -t softab-toolbox:whisper-rocm72 \
+  -f docker/toolbox/Dockerfile.whisper-rocm72 .
+
+# Create toolbox (note --ipc=host)
+toolbox create whisper-rocm \
+  --image localhost/softab-toolbox:whisper-rocm72 \
+  -- --device /dev/dri --device /dev/kfd \
+     --ipc=host \
+     --group-add video --group-add render
+
+# Enter and build whisper.cpp
+toolbox enter whisper-rocm
+build-whisper
+
+# Run transcription
+whisper-run /data/models/ggml-base.en.bin /path/to/audio.wav
+```
+
 ## Ubuntu Users (Distrobox)
 
 Standard `toolbox` package breaks GPU access on Ubuntu 24.04. Use `distrobox` instead:
@@ -153,6 +206,7 @@ Based on SoftAb ablation study (101 configurations tested):
 | llama.cpp tg32 | Vulkan RADV | 245 t/s | Token generation |
 | PyTorch GEMM | Fedora ROCm | **36.27 TFLOPS** | 62% of peak |
 | whisper.cpp | HIP ROCm 7.2 | **58x realtime** | 5.14s for 300s audio |
+| whisper.cpp | Vulkan RADV | ~58x realtime | Similar to HIP |
 
 ## Helper Scripts in Containers
 
@@ -165,6 +219,17 @@ Each toolbox includes helper scripts:
 ### llama.cpp ROCm
 - `build-llama` - Build llama.cpp with ROCm
 - `llama-run` - Run with critical flags + ROCm env
+
+### whisper.cpp Vulkan
+- `whisper-run` - Run transcription
+- `whisper-bench-run` - Benchmark with timing output
+- `whisper-download-model` - Download whisper models from HuggingFace
+
+### whisper.cpp ROCm
+- `build-whisper` - Build whisper.cpp with ROCm (run after toolbox creation)
+- `whisper-run` - Run transcription
+- `whisper-bench-run` - Benchmark with timing output
+- `whisper-download-model` - Download whisper models from HuggingFace
 
 ### PyTorch
 - `pytorch-bench` - Run GEMM benchmark (4096x4096 FP16)
@@ -199,9 +264,17 @@ Each toolbox includes helper scripts:
 ## Build All Toolboxes
 
 ```bash
-# Build all at once
+# Build all at once (5 toolboxes)
 for df in docker/toolbox/Dockerfile.*; do
     name=$(basename $df | sed 's/Dockerfile.//')
+    echo "Building softab-toolbox:$name..."
     podman build -t softab-toolbox:$name -f $df .
 done
+
+# Available toolboxes after build:
+# - softab-toolbox:llama-vulkan-radv
+# - softab-toolbox:llama-rocm72
+# - softab-toolbox:pytorch-fedora
+# - softab-toolbox:whisper-vulkan-radv
+# - softab-toolbox:whisper-rocm72
 ```

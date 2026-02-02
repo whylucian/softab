@@ -30,13 +30,36 @@
 For best compatibility with latest kernels, use TheRock nightly builds:
 
 ```bash
-# Download location
-https://github.com/ROCm/TheRock/releases/tag/nightly-tarball
+# Download gfx1151 nightly tarball
+https://github.com/ROCm/TheRock/releases/
 
-# Or use rocm-sdk helper
-pip install rocm-sdk
-rocm-sdk install --version nightly
+# Untar to any folder (e.g., /opt/rocm or ~/therock/rocm-7.0)
+tar xf rocm-*.tar.xz -C ~/therock/
 ```
+
+**Environment Setup Script** (required to use extracted tarball):
+
+```bash
+# ---- ROCm nightly from extracted tarball ----
+export ROCM_PATH=$HOME/therock/rocm-7.0  # adjust to your path
+export HIP_PLATFORM=amd
+export HIP_PATH=$ROCM_PATH
+export HIP_CLANG_PATH=$ROCM_PATH/llvm/bin
+export HIP_INCLUDE_PATH=$ROCM_PATH/include
+export HIP_LIB_PATH=$ROCM_PATH/lib
+export HIP_DEVICE_LIB_PATH=$ROCM_PATH/lib/llvm/amdgcn/bitcode
+
+# Search paths -- prepend
+export PATH="$ROCM_PATH/bin:$HIP_CLANG_PATH:$PATH"
+export LD_LIBRARY_PATH="$HIP_LIB_PATH:$ROCM_PATH/lib:$ROCM_PATH/lib64:$ROCM_PATH/llvm/lib:${LD_LIBRARY_PATH:-}"
+export LIBRARY_PATH="$HIP_LIB_PATH:$ROCM_PATH/lib:$ROCM_PATH/lib64:${LIBRARY_PATH:-}"
+export CPATH="$HIP_INCLUDE_PATH:${CPATH:-}"
+export PKG_CONFIG_PATH="$ROCM_PATH/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+```
+
+**Compiling llama.cpp with ROCm 7.0 Nightlies**:
+
+One HIP_VERSION change is required - see: https://www.reddit.com/r/LocalLLaMA/comments/1m6b151/comment/n4jlc3z
 
 ## Critical Environment Variables
 
@@ -63,6 +86,8 @@ export ROCBLAS_USE_HIPBLASLT=1
 | PyTorch training | ROCm (TheRock nightlies) |
 | Maximum stability | Vulkan RADV |
 | Windows | Vulkan (ROCm not well supported) |
+
+**Important**: Best backend for prompt processing (pp) often differs from best for token generation (tg). If optimizing for a specific workload, benchmark both phases separately. Different backends also have different performance decay characteristics as context length grows - some have higher peak but drop off faster at long context.
 
 ### Strix Halo vs DGX Spark Performance
 

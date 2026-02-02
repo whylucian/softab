@@ -1,0 +1,88 @@
+# whisper.cpp HIP ablation: hipBLASLt ENABLED
+# Compare with Dockerfile.ablation-hipblaslt-0 to measure hipBLASLt impact
+#
+# Build: podman build -t softab:whisper-hipblaslt-1 -f Dockerfile.ablation-hipblaslt-1 .
+# Run:   podman run --device /dev/kfd --device /dev/dri -v ~/audio:/audio softab:whisper-hipblaslt-1
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.2-complete
+
+LABEL maintainer="softab"
+LABEL description="whisper.cpp HIP with hipBLASLt ENABLED (ablation test)"
+LABEL ablation.type="whisper-cpp"
+LABEL ablation.variable="ROCBLAS_USE_HIPBLASLT"
+LABEL ablation.value="1"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build git \
+    ffmpeg libavcodec-dev libavformat-dev libavutil-dev \
+    bc jq htop curl \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# hipBLASLt ENABLED
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /whisper.cpp
+
+WORKDIR /whisper.cpp
+
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=/opt/rocm/bin/amdclang \
+    -DCMAKE_CXX_COMPILER=/opt/rocm/bin/amdclang++ \
+    -G Ninja && \
+    cmake --build build-hip --parallel $(nproc)
+
+RUN ln -sf /whisper.cpp/build-hip/bin/whisper-cli /usr/local/bin/whisper-cli && \
+    ln -sf /whisper.cpp/build-hip/bin/whisper-bench /usr/local/bin/whisper-bench
+
+# Download base model
+RUN ./models/download-ggml-model.sh base.en
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/bench-whisper
+#!/bin/bash
+echo "=== whisper.cpp hipBLASLt Ablation: ENABLED ==="
+echo "ROCBLAS_USE_HIPBLASLT: $ROCBLAS_USE_HIPBLASLT"
+echo "GFX Target: ${GPU_TARGETS}"
+echo ""
+
+AUDIO=${1:-/audio/test.wav}
+MODEL=${MODEL:-/whisper.cpp/models/ggml-base.en.bin}
+
+if [ ! -f "$AUDIO" ]; then
+    echo "Audio file not found: $AUDIO"
+    echo "Mount audio with: -v /path/to/audio:/audio"
+    exit 1
+fi
+
+echo "Model: $MODEL"
+echo "Audio: $AUDIO"
+echo ""
+
+time whisper-cli -m "$MODEL" -f "$AUDIO" --no-prints
+EOF
+RUN chmod +x /usr/local/bin/bench-whisper
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.backend="hip-hipblaslt-1"
+
+CMD ["bench-whisper"]

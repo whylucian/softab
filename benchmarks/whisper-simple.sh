@@ -5,44 +5,50 @@
 set -e
 
 IMAGE="${1}"
-AUDIO="${2:-/home/tc/softab/samples/jfk.wav}"
+AUDIO="${2:-/data/models/test-audio.wav}"
+WHISPER_MODEL="${WHISPER_MODEL:-/data/models/ggml-base.en.bin}"
 
 if [ -z "$IMAGE" ]; then
     echo "Usage: $0 IMAGE_NAME [AUDIO_FILE]"
-    echo "Example: $0 softab:whisper-hip-rocm72 samples/jfk.wav"
+    echo "Example: $0 softab:whisper-hip-rocm72 /data/models/test-audio.wav"
     exit 1
 fi
 
 if [ ! -f "$AUDIO" ]; then
-    echo "WARNING: Audio file not found: $AUDIO"
-    echo "Using default audio if available in container"
+    echo "ERROR: Audio file not found: $AUDIO"
+    exit 1
+fi
+
+if [ ! -f "$WHISPER_MODEL" ]; then
+    echo "ERROR: Whisper model not found: $WHISPER_MODEL"
+    echo "Download with: huggingface-cli download ggerganov/whisper.cpp ggml-base.en.bin --local-dir /data/models"
+    exit 1
 fi
 
 echo "=== whisper.cpp Simple Test ==="
 echo "Image: $IMAGE"
 echo "Audio: $(basename $AUDIO)"
+echo "Model: $(basename $WHISPER_MODEL)"
 echo ""
 
 # HIP/ROCm requires --ipc=host on Strix Halo
-CONTAINER_FLAGS="--device=/dev/kfd --device=/dev/dri --ipc=host"
+# Security opts needed for ROCm memory operations
+CONTAINER_FLAGS="--device=/dev/kfd --device=/dev/dri --ipc=host --security-opt seccomp=unconfined --security-opt label=disable"
 
-if [ -f "$AUDIO" ]; then
-    podman run --rm \
-        $CONTAINER_FLAGS \
-        -v "$(dirname $AUDIO):/audio:ro" \
-        "$IMAGE" \
-        whisper-cli \
-            -m /whisper.cpp/models/ggml-base.en.bin \
-            -f "/audio/$(basename $AUDIO)" \
-            --print-colors \
-            --no-timestamps 2>&1 | tee /tmp/whisper-simple-test.log
-else
-    echo "No audio file mounted, testing with container's sample if available"
-    podman run --rm $CONTAINER_FLAGS "$IMAGE" \
-        whisper-cli -m /whisper.cpp/models/ggml-base.en.bin -f /whisper.cpp/samples/jfk.wav --no-timestamps
-fi
+podman run --rm \
+    $CONTAINER_FLAGS \
+    -v "$(dirname $AUDIO):/audio:ro" \
+    -v "$WHISPER_MODEL:/models/ggml-base.en.bin:ro" \
+    "$IMAGE" \
+    whisper-cli \
+        -m /models/ggml-base.en.bin \
+        -f "/audio/$(basename $AUDIO)" \
+        --print-colors \
+        --no-timestamps 2>&1 | tee /tmp/whisper-simple-test.log
 
-if [ $? -eq 0 ]; then
+EXIT_CODE=${PIPESTATUS[0]}
+
+if [ $EXIT_CODE -eq 0 ]; then
     echo ""
     echo "=== SUCCESS: Audio transcribed ==="
 else

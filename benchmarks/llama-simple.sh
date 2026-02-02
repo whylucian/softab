@@ -24,26 +24,29 @@ echo "Model: $(basename $MODEL)"
 echo ""
 
 # Determine container flags based on image type
-CONTAINER_FLAGS="--device=/dev/dri"
+# Security opts needed for ROCm memory operations
+CONTAINER_FLAGS="--device=/dev/dri --security-opt seccomp=unconfined --security-opt label=disable"
 if [[ "$IMAGE" == *"hip"* ]] || [[ "$IMAGE" == *"rocm"* ]]; then
-    CONTAINER_FLAGS="--device=/dev/kfd --device=/dev/dri --ipc=host"
+    CONTAINER_FLAGS="--device=/dev/kfd --device=/dev/dri --ipc=host --security-opt seccomp=unconfined --security-opt label=disable"
     echo "Detected HIP/ROCm backend - using --ipc=host"
 fi
 
+# Use llama-bench for reliable benchmarking (no conversation mode issues)
+# HSA env vars help ensure VRAM allocation instead of GTT
 podman run --rm \
     $CONTAINER_FLAGS \
+    -e HSA_ENABLE_SDMA=0 \
+    -e GPU_MAX_HEAP_SIZE=100 \
     -v "$(dirname $MODEL):/models:ro" \
     "$IMAGE" \
-    llama-cli \
+    llama-bench \
         --model "/models/$(basename $MODEL)" \
-        --no-mmap \
         -ngl 999 \
-        -fa 1 \
-        -p "Hello, how are you?" \
-        -n 32 \
-        --log-disable 2>&1 | tee /tmp/llama-simple-test.log
+        -p 512 -n 128 2>&1 | tee /tmp/llama-simple-test.log
 
-if [ $? -eq 0 ]; then
+EXIT_CODE=${PIPESTATUS[0]}
+
+if [ $EXIT_CODE -eq 0 ]; then
     echo ""
     echo "=== SUCCESS: Model loaded and generated tokens ==="
 else

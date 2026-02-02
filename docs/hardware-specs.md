@@ -13,7 +13,7 @@
 | Peak INT8 | 59.4 TOPS |
 | Peak INT4 | 118.8 TOPS |
 | Memory | 128GB LPDDR5X-8000 (unified) |
-| Memory Bandwidth | 256 GB/s (GPU), ~128 GB/s (CPU) |
+| Memory Bandwidth | 256 GB/s theoretical, **~215 GB/s measured** (84% efficiency) |
 
 **Peak FP16 Calculation**: `512 ops/clock/CU × 40 CU × 2.9e9 clock / 1e12 = 59.392 TFLOPS`
 

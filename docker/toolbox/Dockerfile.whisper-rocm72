@@ -1,0 +1,160 @@
+# Fedora Toolbox for whisper.cpp with ROCm 7.2 HIP
+# Compatible with: toolbox create / distrobox create
+# CRITICAL: Requires --ipc=host for Strix Halo unified memory!
+# Run with: --device /dev/dri --device /dev/kfd --ipc=host --group-add video --group-add render
+
+FROM registry.fedoraproject.org/fedora-toolbox:43
+
+LABEL maintainer="softab"
+LABEL description="whisper.cpp ROCm 7.2 HIP Toolbox for Strix Halo"
+LABEL usage="toolbox create whisper-rocm --image IMAGE -- --device /dev/dri --device /dev/kfd --ipc=host --group-add video --group-add render"
+LABEL backend="hip-rocm72"
+LABEL ablation.type="toolbox"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install ROCm 7.2 from Fedora repos + build tools + ffmpeg
+RUN dnf install -y \
+    rocm-hip rocm-runtime rocm-smi rocminfo hip-devel \
+    rocblas hipblas rocm-cmake \
+    gcc gcc-c++ cmake ninja-build git \
+    ffmpeg \
+    bc jq htop vim nano \
+    wget curl file \
+    && dnf clean all
+
+# ROCm environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV GPU_TARGETS=gfx1151
+ENV AMDGPU_TARGETS=gfx1151
+
+# Clone whisper.cpp (will be built by user with build-whisper script)
+RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /opt/whisper.cpp
+
+# Build script (user runs this after toolbox creation)
+RUN echo '#!/bin/bash\n\
+echo "Building whisper.cpp with ROCm HIP for gfx1151..."\n\
+cd /opt/whisper.cpp\n\
+\n\
+# Clean previous build if exists\n\
+rm -rf build\n\
+\n\
+cmake -B build \\\n\
+    -DGGML_HIP=ON \\\n\
+    -DAMDGPU_TARGETS="gfx1151" \\\n\
+    -DCMAKE_BUILD_TYPE=Release \\\n\
+    -G Ninja\n\
+\n\
+cmake --build build --parallel $(nproc)\n\
+\n\
+# Create symlinks\n\
+sudo ln -sf /opt/whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli\n\
+sudo ln -sf /opt/whisper.cpp/build/bin/whisper-bench /usr/local/bin/whisper-bench 2>/dev/null || true\n\
+\n\
+echo ""\n\
+echo "Build complete! Run: whisper-run <model.bin> <audio.wav>"\n\
+' > /usr/local/bin/build-whisper && chmod +x /usr/local/bin/build-whisper
+
+# Helper script for running whisper
+RUN echo '#!/bin/bash\n\
+# whisper.cpp ROCm wrapper for Strix Halo\n\
+\n\
+MODEL="${1}"\n\
+AUDIO="${2}"\n\
+\n\
+if [ -z "$MODEL" ] || [ -z "$AUDIO" ]; then\n\
+    echo "Usage: whisper-run <model.bin> <audio.wav> [additional args]"\n\
+    echo ""\n\
+    echo "Example:"\n\
+    echo "  whisper-run /data/models/ggml-base.en.bin /data/audio/test.wav"\n\
+    echo ""\n\
+    echo "NOTE: Run build-whisper first if you havent built whisper.cpp yet"\n\
+    exit 1\n\
+fi\n\
+shift 2\n\
+\n\
+# Verify build exists\n\
+if [ ! -f /opt/whisper.cpp/build/bin/whisper-cli ]; then\n\
+    echo "ERROR: whisper.cpp not built yet. Run: build-whisper"\n\
+    exit 1\n\
+fi\n\
+\n\
+echo "Running whisper.cpp with ROCm HIP (gfx1151)..."\n\
+exec whisper-cli -m "$MODEL" -f "$AUDIO" "$@"\n\
+' > /usr/local/bin/whisper-run && chmod +x /usr/local/bin/whisper-run
+
+# Benchmark helper
+RUN echo '#!/bin/bash\n\
+MODEL="${1}"\n\
+AUDIO="${2}"\n\
+\n\
+if [ -z "$MODEL" ] || [ -z "$AUDIO" ]; then\n\
+    echo "Usage: whisper-bench-run <model.bin> <audio.wav>"\n\
+    exit 1\n\
+fi\n\
+\n\
+if [ ! -f /opt/whisper.cpp/build/bin/whisper-cli ]; then\n\
+    echo "ERROR: whisper.cpp not built yet. Run: build-whisper"\n\
+    exit 1\n\
+fi\n\
+\n\
+echo "=== whisper.cpp HIP ROCm 7.2 Benchmark ==="\n\
+echo "GFX Target: gfx1151"\n\
+rocminfo 2>/dev/null | grep -A1 "Marketing Name" | head -2\n\
+echo ""\n\
+echo "Model: $MODEL"\n\
+echo "Audio: $AUDIO"\n\
+DURATION=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$AUDIO" 2>/dev/null || echo "unknown")\n\
+echo "Audio duration: ${DURATION}s"\n\
+echo ""\n\
+echo "Running transcription..."\n\
+START=$(date +%s.%N)\n\
+whisper-cli -m "$MODEL" -f "$AUDIO" 2>&1\n\
+END=$(date +%s.%N)\n\
+ELAPSED=$(echo "$END - $START" | bc)\n\
+echo ""\n\
+echo "=== Results ==="\n\
+echo "Transcription time: ${ELAPSED}s"\n\
+if [ "$DURATION" != "unknown" ]; then\n\
+    RATIO=$(echo "scale=2; $DURATION / $ELAPSED" | bc)\n\
+    echo "Speed: ${RATIO}x realtime"\n\
+fi\n\
+' > /usr/local/bin/whisper-bench-run && chmod +x /usr/local/bin/whisper-bench-run
+
+# Model download helper
+RUN echo '#!/bin/bash\n\
+MODEL="${1:-base.en}"\n\
+DEST="${2:-/data/models}"\n\
+\n\
+echo "Downloading whisper model: $MODEL"\n\
+echo "Destination: $DEST"\n\
+mkdir -p "$DEST"\n\
+\n\
+case "$MODEL" in\n\
+    tiny|tiny.en|base|base.en|small|small.en|medium|medium.en|large-v3)\n\
+        wget -c "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${MODEL}.bin" -O "$DEST/ggml-${MODEL}.bin"\n\
+        ;;\n\
+    *)\n\
+        echo "Unknown model: $MODEL"\n\
+        echo "Available: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large-v3"\n\
+        exit 1\n\
+        ;;\n\
+esac\n\
+' > /usr/local/bin/whisper-download-model && chmod +x /usr/local/bin/whisper-download-model
+
+WORKDIR /workspace
+
+# Toolbox compatibility labels
+LABEL com.github.containers.toolbox="true"
+LABEL com.github.debarshiray.toolbox="true"
+
+CMD ["/bin/bash"]

@@ -1,0 +1,81 @@
+# llama.cpp Vulkan AMDVLK with optimal batch size (-ub 512)
+# From Reddit benchmarks: AMDVLK optimal at -ub 512, RADV at -ub 1024
+#
+# Build: podman build -t softab:llama-vulkan-amdvlk-ub512 -f Dockerfile.vulkan-amdvlk-ub512 .
+# Run:   podman run --device /dev/dri -v ~/models:/models -e MODEL=/models/test.gguf softab:llama-vulkan-amdvlk-ub512
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp Vulkan AMDVLK with optimal batch size -ub 512"
+LABEL ablation.driver="amdvlk"
+LABEL ablation.batch_size="512"
+LABEL ablation.note="Reddit benchmarks show AMDVLK optimal at -ub 512"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install dependencies
+RUN dnf -y update && dnf -y install \
+    gcc gcc-c++ cmake ninja-build git \
+    python3 python3-pip \
+    vulkan-loader vulkan-loader-devel vulkan-headers vulkan-tools \
+    glslc glslang \
+    bc jq htop wget \
+    && dnf clean all
+
+# Install AMDVLK from AMD's releases
+RUN wget -q https://github.com/GPUOpen-Drivers/AMDVLK/releases/download/v-2024.Q4.3/amdvlk_2024.Q4.3_amd64.rpm -O /tmp/amdvlk.rpm && \
+    rpm -ivh /tmp/amdvlk.rpm || dnf -y install /tmp/amdvlk.rpm || \
+    echo "AMDVLK install may have failed - falling back to Mesa" && \
+    rm -f /tmp/amdvlk.rpm
+
+# Force AMDVLK as the ICD
+ENV AMD_VULKAN_ICD=AMDVLK
+ENV VK_ICD_FILENAMES=/etc/vulkan/icd.d/amd_icd64.json
+ENV GGML_VK_PREFER_HOST_MEMORY=ON
+
+# Clone and build llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+RUN cmake -B build-vulkan \
+    -DGGML_VULKAN=ON \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-vulkan -j$(nproc)
+
+RUN ln -sf /llama.cpp/build-vulkan/bin/llama-cli /usr/local/bin/llama-cli && \
+    ln -sf /llama.cpp/build-vulkan/bin/llama-bench /usr/local/bin/llama-bench && \
+    ln -sf /llama.cpp/build-vulkan/bin/llama-server /usr/local/bin/llama-server
+
+WORKDIR /workspace
+
+COPY <<'EOF' /usr/local/bin/bench-llama
+#!/bin/bash
+echo "=== llama.cpp Vulkan AMDVLK -ub 512 Benchmark ==="
+echo "AMD_VULKAN_ICD: $AMD_VULKAN_ICD"
+echo "Batch size (-ub): 512 (AMDVLK optimal)"
+echo ""
+echo "Vulkan device:"
+vulkaninfo 2>/dev/null | grep -E "(deviceName|driverName)" | head -4
+echo ""
+
+if [ -z "$MODEL" ]; then
+    echo "Set MODEL=/path/to/model.gguf"
+    exit 1
+fi
+
+echo "Model: $MODEL"
+echo ""
+
+# Run with optimal AMDVLK batch size
+llama-bench -m "$MODEL" --mmap 0 -ngl 999 -fa 1 -ub 512 -p 512 -n 128
+EOF
+RUN chmod +x /usr/local/bin/bench-llama
+
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="vulkan-amdvlk-ub512"
+
+CMD ["bench-llama"]

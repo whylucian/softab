@@ -11,6 +11,7 @@ build/
 
 # Experiment raw results (too large to commit)
 experiments/*/raw_results/
+experiments/*/*.txt
 *.log
 
 # Results folder (generated data)

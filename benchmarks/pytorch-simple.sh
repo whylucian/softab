@@ -16,8 +16,11 @@ echo "Image: $IMAGE"
 echo "Testing: Basic GPU access and minimal computation"
 echo ""
 
-podman run --rm \
+podman run --rm -i \
     --device=/dev/kfd --device=/dev/dri \
+    --ipc=host \
+    --security-opt seccomp=unconfined \
+    --security-opt label=disable \
     "$IMAGE" python3 << 'EOF'
 import torch
 import sys

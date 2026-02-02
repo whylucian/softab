@@ -23,8 +23,11 @@ echo ""
 
 OUTPUT_FILE="pytorch_gemm_$(date +%Y%m%d_%H%M%S).json"
 
-podman run --rm \
+podman run --rm -i \
     --device=/dev/kfd --device=/dev/dri \
+    --ipc=host \
+    --security-opt seccomp=unconfined \
+    --security-opt label=disable \
     "$IMAGE" python3 << EOF
 import torch
 import time

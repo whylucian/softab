@@ -1,0 +1,200 @@
+# WhisperX with ROCm 6.2 - Working Combined Transcription + Diarization
+# Based on the working pyannote-rocm62 configuration
+#
+# Usage:
+#   podman build --security-opt seccomp=unconfined --security-opt label=disable \
+#     -f docker/pyannote/Dockerfile.whisperx-rocm62-working \
+#     -t softab:whisperx-rocm62-working-gfx1151 .
+#
+#   podman run --rm --device=/dev/kfd --device=/dev/dri --ipc=host \
+#     --security-opt seccomp=unconfined \
+#     -e HF_TOKEN=$HF_TOKEN \
+#     -v /data/models:/audio:ro \
+#     softab:whisperx-rocm62-working-gfx1151 \
+#     whisperx /audio/test-audio.wav --model base.en --diarize
+
+FROM ubuntu:24.04
+
+LABEL maintainer="softab"
+LABEL description="WhisperX (Faster-Whisper + pyannote) ROCm 6.2 for Strix Halo"
+LABEL backend="pytorch-rocm"
+LABEL rocm.version="6.2"
+LABEL python.version="3.12"
+LABEL features="transcription,diarization"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.12, ffmpeg, and essentials
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-dev \
+    python3-venv \
+    ffmpeg \
+    git \
+    wget \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Strix Halo settings - CRITICAL for ROCm 6.2 on gfx1151
+ENV HSA_OVERRIDE_GFX_VERSION=11.0.0
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV PYTORCH_ROCM_ARCH="gfx1151"
+ENV ROCBLAS_USE_HIPBLASLT=1
+
+# Install PyTorch for ROCm 6.2 FIRST (before anything else)
+RUN pip3 install --break-system-packages --no-cache-dir \
+    torch torchaudio \
+    --index-url https://download.pytorch.org/whl/rocm6.2
+
+# Install pyannote-audio dependencies
+RUN pip3 install --break-system-packages --no-cache-dir \
+    einops \
+    asteroid-filterbanks \
+    librosa \
+    soundfile \
+    numpy \
+    scipy \
+    huggingface-hub \
+    omegaconf \
+    "pytorch-metric-learning>=2.0" \
+    semver \
+    typing-extensions \
+    pytorch-lightning \
+    pyannote.core \
+    pyannote.database \
+    pyannote.pipeline \
+    pyannote.metrics
+
+# Install pyannote.audio (for diarization)
+RUN pip3 install --break-system-packages --no-cache-dir \
+    "pyannote.audio==3.3.2"
+
+# Install faster-whisper, whisperx dependencies
+RUN pip3 install --break-system-packages --no-cache-dir \
+    faster-whisper \
+    ctranslate2 \
+    transformers \
+    nltk
+
+# Install whisperx with --no-deps to avoid pulling wrong torch version
+RUN pip3 install --break-system-packages --no-cache-dir --no-deps \
+    git+https://github.com/m-bain/whisperx.git
+
+# Reinstall ROCm PyTorch to ensure it wasn't overwritten
+RUN pip3 install --break-system-packages --no-cache-dir --force-reinstall \
+    torch torchaudio \
+    --index-url https://download.pytorch.org/whl/rocm6.2
+
+WORKDIR /workspace
+
+# Create test script
+COPY <<'EOF' /workspace/test_whisperx.py
+#!/usr/bin/env python3
+"""Test WhisperX on AMD ROCm"""
+import os
+import sys
+import torch
+
+def main():
+    print("=== WhisperX ROCm 6.2 Test ===")
+    print(f"Python: {sys.version}")
+    print(f"PyTorch: {torch.__version__}")
+    print(f"ROCm: {torch.version.hip if hasattr(torch.version, 'hip') else 'N/A'}")
+    print(f"GPU available: {torch.cuda.is_available()}")
+
+    if torch.cuda.is_available():
+        print(f"GPU device: {torch.cuda.get_device_name(0)}")
+
+    # Check whisperx
+    try:
+        import whisperx
+        print(f"WhisperX: available")
+    except ImportError as e:
+        print(f"WhisperX: NOT available - {e}")
+        return 1
+
+    # Check pyannote
+    try:
+        import pyannote.audio
+        print(f"pyannote.audio: {pyannote.audio.__version__}")
+    except ImportError as e:
+        print(f"pyannote.audio: NOT available - {e}")
+        return 1
+
+    # Check faster-whisper
+    try:
+        import faster_whisper
+        print(f"faster-whisper: available")
+    except ImportError as e:
+        print(f"faster-whisper: NOT available - {e}")
+        return 1
+
+    hf_token = os.environ.get('HF_TOKEN')
+    if not hf_token:
+        print("\nWARNING: HF_TOKEN not set")
+        print("  - Transcription will work")
+        print("  - Diarization requires token")
+
+    print("\nSUCCESS: WhisperX ready for use!")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
+EOF
+
+RUN chmod +x /workspace/test_whisperx.py
+
+# Create run script for easy usage
+COPY <<'EOF' /usr/local/bin/run-whisperx
+#!/bin/bash
+# Run WhisperX with optimal settings for Strix Halo
+
+AUDIO="$1"
+shift
+
+if [ -z "$AUDIO" ]; then
+    echo "Usage: run-whisperx <audio_file> [whisperx options]"
+    echo "Example: run-whisperx audio.wav --model base.en --diarize"
+    exit 1
+fi
+
+# Monkeypatch for use_auth_token -> token compatibility
+python3 -c "
+import sys
+sys.argv = ['whisperx', '$AUDIO'] + '$*'.split()
+
+# Patch huggingface_hub for compatibility
+import huggingface_hub
+_orig_download = huggingface_hub.hf_hub_download
+def _patched_download(*args, **kwargs):
+    if 'use_auth_token' in kwargs:
+        kwargs['token'] = kwargs.pop('use_auth_token')
+    return _orig_download(*args, **kwargs)
+huggingface_hub.hf_hub_download = _patched_download
+
+_orig_snapshot = huggingface_hub.snapshot_download
+def _patched_snapshot(*args, **kwargs):
+    if 'use_auth_token' in kwargs:
+        kwargs['token'] = kwargs.pop('use_auth_token')
+    return _orig_snapshot(*args, **kwargs)
+huggingface_hub.snapshot_download = _patched_snapshot
+
+# Run whisperx
+from whisperx.cli import cli
+cli()
+"
+EOF
+
+RUN chmod +x /usr/local/bin/run-whisperx
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="whisperx"
+LABEL ablation.backend="pytorch-rocm62"
+
+CMD ["python3", "test_whisperx.py"]

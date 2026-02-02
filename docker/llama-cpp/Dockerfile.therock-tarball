@@ -1,0 +1,128 @@
+# llama.cpp with TheRock tarball extraction (not pip install)
+# Based on lhl's strix-halo-testing approach from Reddit
+# Downloads and extracts TheRock nightly tarball with full env setup
+#
+# Build: podman build -t softab:llama-therock-tarball -f Dockerfile.therock-tarball .
+# Run:   podman run --device /dev/kfd --device /dev/dri -v ~/models:/models -e MODEL=/models/test.gguf softab:llama-therock-tarball
+
+FROM fedora:43
+
+LABEL maintainer="softab"
+LABEL description="llama.cpp with TheRock nightly tarball (extracted, not pip)"
+LABEL ablation.type="llama-cpp"
+LABEL ablation.backend="therock-tarball"
+LABEL ablation.note="Uses extracted tarball approach from lhl/strix-halo-testing"
+
+ARG GFX_TARGET=gfx1151
+ARG THEROCK_VERSION=nightly
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Install build tools
+RUN dnf -y update && dnf -y install \
+    cmake ninja-build gcc gcc-c++ git \
+    python3.12 python3.12-devel \
+    bc jq htop wget curl tar xz \
+    && dnf clean all
+
+# Download and extract TheRock nightly tarball
+# Note: URL structure may change - check https://github.com/ROCm/TheRock/releases
+WORKDIR /opt
+RUN mkdir -p /opt/therock && \
+    echo "Downloading TheRock nightly for gfx1151..." && \
+    curl -sL "https://github.com/ROCm/TheRock/releases/download/nightly-tarball/therock-gfx1151-linux.tar.xz" \
+    -o /tmp/therock.tar.xz 2>/dev/null || \
+    curl -sL "https://github.com/ROCm/TheRock/releases/latest/download/therock-gfx1151-linux.tar.xz" \
+    -o /tmp/therock.tar.xz 2>/dev/null || \
+    echo "TheRock tarball download may have failed - check releases page" && \
+    ([ -f /tmp/therock.tar.xz ] && tar xf /tmp/therock.tar.xz -C /opt/therock --strip-components=1 || true) && \
+    rm -f /tmp/therock.tar.xz
+
+# Environment setup script (from lhl's strix-halo-testing rocm-therock-env.sh)
+ENV ROCM_PATH=/opt/therock
+ENV HIP_PLATFORM=amd
+ENV HIP_PATH=/opt/therock
+ENV HIP_CLANG_PATH=/opt/therock/llvm/bin
+ENV HIP_INCLUDE_PATH=/opt/therock/include
+ENV HIP_LIB_PATH=/opt/therock/lib
+ENV HIP_DEVICE_LIB_PATH=/opt/therock/lib/llvm/amdgcn/bitcode
+
+# Search paths - prepend
+ENV PATH="/opt/therock/bin:/opt/therock/llvm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/therock/lib:/opt/therock/lib64:/opt/therock/llvm/lib:${LD_LIBRARY_PATH:-}"
+ENV LIBRARY_PATH="/opt/therock/lib:/opt/therock/lib64:${LIBRARY_PATH:-}"
+ENV CPATH="/opt/therock/include:${CPATH:-}"
+ENV PKG_CONFIG_PATH="/opt/therock/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+ENV CMAKE_PREFIX_PATH="/opt/therock"
+
+# Critical Strix Halo settings
+ENV HSA_ENABLE_SDMA=0
+ENV ROCBLAS_USE_HIPBLASLT=1
+ENV HIP_VISIBLE_DEVICES=0
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+
+# Clone llama.cpp
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+
+WORKDIR /llama.cpp
+
+# Build with HIP using TheRock tarball
+# Note: May need HIP_VERSION patch for ROCm 7.0 - see:
+# https://www.reddit.com/r/LocalLLaMA/comments/1m6b151/comment/n4jlc3z
+RUN cmake -B build-hip \
+    -DGGML_HIP=ON \
+    -DAMDGPU_TARGETS="${GFX_TARGET}" \
+    -DGGML_HIP_UMA=OFF \
+    -DCMAKE_BUILD_TYPE=Release \
+    -G Ninja && \
+    cmake --build build-hip -j$(nproc) 2>&1 || echo "Build completed (check for errors)"
+
+# Create symlinks if binaries exist
+RUN [ -f build-hip/bin/llama-cli ] && ln -sf /llama.cpp/build-hip/bin/llama-cli /usr/local/bin/llama-cli || true && \
+    [ -f build-hip/bin/llama-bench ] && ln -sf /llama.cpp/build-hip/bin/llama-bench /usr/local/bin/llama-bench || true && \
+    [ -f build-hip/bin/llama-server ] && ln -sf /llama.cpp/build-hip/bin/llama-server /usr/local/bin/llama-server || true
+
+WORKDIR /workspace
+
+# Benchmark script
+COPY <<'EOF' /usr/local/bin/bench-llama
+#!/bin/bash
+echo "=== llama.cpp TheRock Tarball Benchmark ==="
+echo "ROCM_PATH: $ROCM_PATH"
+echo "GFX Target: $AMDGPU_TARGETS"
+echo "ROCBLAS_USE_HIPBLASLT: $ROCBLAS_USE_HIPBLASLT"
+echo ""
+echo "TheRock version:"
+cat /opt/therock/.info/version 2>/dev/null || ls /opt/therock/ | head -5
+echo ""
+
+if [ -z "$MODEL" ]; then
+    echo "Set MODEL=/path/to/model.gguf"
+    echo "Example: podman run -e MODEL=/models/qwen.gguf -v ~/models:/models ..."
+    exit 1
+fi
+
+echo "Model: $MODEL"
+echo ""
+
+if [ -f /llama.cpp/build-hip/bin/llama-bench ]; then
+    /llama.cpp/build-hip/bin/llama-bench \
+        -m "$MODEL" \
+        --mmap 0 \
+        -ngl 999 \
+        -fa 1 \
+        -p 512 \
+        -n 128
+else
+    echo "llama-bench not found - build may have failed"
+    echo "Check /llama.cpp/build-hip/ for errors"
+    ls -la /llama.cpp/build-hip/bin/ 2>/dev/null || echo "No bin directory"
+fi
+EOF
+RUN chmod +x /usr/local/bin/bench-llama
+
+LABEL gfx.target="${GFX_TARGET}"
+
+CMD ["bench-llama"]
