@@ -62,12 +62,12 @@ Add to `GRUB_CMDLINE_LINUX_DEFAULT`:
 
 ```bash
 # Option 1: Maximum memory (kyuz0 toolboxes - 124GB GPU, 4GB OS)
-amd_iommu=off              # ~6% faster memory reads
+amd_iommu=off              # May improve perf (unverified, see experiment-kernel-config.md)
 amdgpu.gttsize=126976      # 124GB GTT size
 ttm.pages_limit=32505856   # 124GB in pages (4KB pages)
 
 # Option 2: Alternative full allocation (~128GB GPU)
-amd_iommu=off              # ~6% faster memory reads
+amd_iommu=off              # May improve perf (unverified, see experiment-kernel-config.md)
 amdgpu.gttsize=131072      # 128GB GTT size
 ttm.pages_limit=33554432   # ~128GB in pages
 amdgpu.cwsr_enable=0       # Fix MES hangs (add if needed)

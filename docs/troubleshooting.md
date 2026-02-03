@@ -55,21 +55,22 @@ sudo reboot
 
 ### HSA_OVERRIDE_GFX_VERSION Hack
 
-⚠️ **NOT RECOMMENDED for production**
+⚠️ **NOT RECOMMENDED** - Native gfx1151 is now faster!
 
 ```bash
-# Forces gfx1100 kernels (2-6x faster but unstable)
+# Forces gfx1100 kernels (OUTDATED - no longer faster)
 export HSA_OVERRIDE_GFX_VERSION=11.0.0
 export HSA_ENABLE_SDMA=0
 ```
 
-**Issues with HSA_OVERRIDE**:
+**Why you shouldn't use this anymore**:
+- ~~"gfx1100 is 2-6x faster"~~ **OUTDATED** as of TheRock 7.11
+- Native gfx1151 is now **2x faster for transformers** (ViT, BERT)
+- CNNs perform the same on both
 - Causes eventual MES/kernel errors
 - May crash on long-running workloads
-- hipBLASLt disabled (reduced performance)
-- Not suitable for production use
 
-**Better alternative**: Wait for native gfx1151 support or use TheRock nightlies
+**Better alternative**: Use TheRock 7.11 nightlies with native gfx1151 support
 
 ### Bad Firmware
 
@@ -167,7 +168,7 @@ sudo dnf install tuned
 sudo systemctl enable --now tuned
 sudo tuned-adm profile accelerator-performance
 
-# 2. Disable IOMMU for ~6% faster memory reads
+# 2. Disable IOMMU (may improve perf, unverified - see experiment-kernel-config.md)
 # Add to /etc/default/grub:
 GRUB_CMDLINE_LINUX_DEFAULT="... amd_iommu=off"
 sudo grub2-mkconfig -o /boot/grub2/grub.cfg
