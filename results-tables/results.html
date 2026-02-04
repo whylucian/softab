@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>AMD Radeon 8060S Benchmark Results</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 20px; background: #1a1a2e; color: #eee; }
+h1, h2, h3 { color: #00d4ff; }
+table { border-collapse: collapse; width: 100%; margin: 20px 0; font-size: 13px; }
+th, td { border: 1px solid #333; padding: 8px 12px; text-align: left; }
+th { background: #16213e; color: #00d4ff; position: sticky; top: 0; }
+tr:nth-child(even) { background: #1f1f3a; }
+tr:nth-child(odd) { background: #16213e; }
+tr:hover { background: #2a2a5a; }
+.best-pp { background: #004d00 !important; color: #00ff00; font-weight: bold; }
+.best-tg { background: #4d0000 !important; color: #ff6666; font-weight: bold; }
+.best-both { background: #4d4d00 !important; color: #ffff00; font-weight: bold; }
+.rocm { color: #ff9800; }
+.vulkan { color: #9c27b0; }
+.moe { color: #00bcd4; }
+.summary { background: #0d1b2a; padding: 15px; border-radius: 8px; margin: 20px 0; }
+.summary td { border: none; padding: 5px 15px; }
+.filter-bar { margin: 20px 0; padding: 15px; background: #16213e; border-radius: 8px; }
+.filter-bar select, .filter-bar input { padding: 8px; margin: 5px; background: #1a1a2e; color: #eee; border: 1px solid #333; border-radius: 4px; }
+.stats { display: flex; gap: 20px; flex-wrap: wrap; margin: 20px 0; }
+.stat-card { background: #16213e; padding: 15px 25px; border-radius: 8px; text-align: center; }
+.stat-card .value { font-size: 28px; font-weight: bold; color: #00d4ff; }
+.stat-card .label { font-size: 12px; color: #888; }
+</style>
+</head>
+<body>
+
+<h1>AMD Radeon 8060S (gfx1151) Benchmark Results</h1>
+<p>llama-bench pp512 tg128 r5 | 191 benchmarks | 2026-02-02</p>
+
+<div class="stats">
+<div class="stat-card"><div class="value">15</div><div class="label">Images Tested</div></div>
+<div class="stat-card"><div class="value">13</div><div class="label">Models Tested</div></div>
+<div class="stat-card"><div class="value">191</div><div class="label">Benchmarks Run</div></div>
+<div class="stat-card"><div class="value">5821</div><div class="label">Best pp512 (t/s)</div></div>
+<div class="stat-card"><div class="value">260</div><div class="label">Best tg128 (t/s)</div></div>
+</div>
+
+<h2>Best Results by Model</h2>
+<table>
+<tr><th>Model</th><th>Size</th><th>Params</th><th>Type</th><th>Best pp512</th><th>Best pp Image</th><th>Best tg128</th><th>Best tg Image</th></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636 MiB</td><td>1.1B</td><td>Dense</td><td class="best-pp">5821 t/s</td><td>hipblaslt-0</td><td class="best-tg">260 t/s</td><td>vulkan-radv-ub1024</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.6B</td><td>Dense</td><td class="best-pp">3428 t/s</td><td>hipblaslt-0</td><td class="best-tg">119 t/s</td><td>vulkan-radv-fa</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.2B</td><td>Dense</td><td class="best-pp">2142 t/s</td><td>vulkan-radv-fa</td><td class="best-tg">60 t/s</td><td>vulkan-radv-fa</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.6B</td><td>Dense</td><td class="best-pp">1421 t/s</td><td>hipblaslt-0</td><td class="best-tg">37 t/s</td><td>moe</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.8B</td><td>Dense</td><td class="best-pp">676 t/s</td><td>hipblaslt-0</td><td class="best-tg">24 t/s</td><td>vulkan-radv-fa-finegrain</td></tr>
+<tr><td>openai_gpt-oss-20b</td><td>10.9 GiB</td><td>20.9B</td><td class="moe">MoE</td><td class="best-pp">1168 t/s</td><td>vulkan-radv-ub1024</td><td class="best-tg">82 t/s</td><td>vulkan-radv-ub1024</td></tr>
+<tr><td>GLM-4.7-Flash</td><td>16.9 GiB</td><td>29.9B</td><td class="moe">MoE</td><td class="best-pp">863 t/s</td><td>vulkan-radv-fa-finegrain</td><td class="best-tg">71 t/s</td><td>vulkan-radv-fa</td></tr>
+<tr><td>Qwen3-30B-A3B</td><td>17.3 GiB</td><td>30.5B</td><td class="moe">MoE</td><td class="best-pp">1096 t/s</td><td>hipblaslt-0</td><td class="best-tg">88 t/s</td><td>vulkan-radv-ub1024</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.5 GiB</td><td>32.8B</td><td>Dense</td><td class="best-pp">307 t/s</td><td>hipblaslt-0</td><td class="best-tg">11 t/s</td><td>vulkan-radv-ub1024</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.6 GiB</td><td>70.6B</td><td>Dense</td><td class="best-pp">128 t/s</td><td>hipblaslt-0</td><td class="best-tg">5.1 t/s</td><td>vulkan-radv-ub1024</td></tr>
+<tr><td>Qwen3-Next-80B-A3B</td><td>45.1 GiB</td><td>79.7B</td><td class="moe">MoE</td><td class="best-pp">615 t/s</td><td>hipblaslt-0</td><td class="best-tg">44 t/s</td><td>vulkan</td></tr>
+<tr><td>openai_gpt-oss-120b</td><td>58.5 GiB</td><td>117B</td><td class="moe">MoE</td><td class="best-pp">488 t/s</td><td>vulkan-radv-ub1024</td><td class="best-tg">58 t/s</td><td>vulkan-radv-ub1024</td></tr>
+<tr><td>Qwen3-235B-A22B</td><td>105 GiB</td><td>235B</td><td class="moe">MoE</td><td class="best-pp">172 t/s</td><td>hipblaslt-0</td><td class="best-tg">16 t/s</td><td>vulkan-radv-fa-finegrain</td></tr>
+</table>
+
+<h2>All Results - Sorted by Model Size</h2>
+<table id="results">
+<tr>
+<th>Model</th>
+<th>Size</th>
+<th>Params</th>
+<th>Image</th>
+<th>Backend</th>
+<th>pp512 (t/s)</th>
+<th>tg128 (t/s)</th>
+</tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td class="best-pp">5820.68</td><td>212.35</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>5642.90</td><td>258.95</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>5602.10</td><td>257.81</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>5597.76</td><td>257.86</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>5590.72</td><td>258.72</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>5583.54</td><td class="best-tg">259.68</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>5546.77</td><td>257.35</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>4913.05</td><td>212.77</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>4867.30</td><td>209.73</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>4765.45</td><td>184.93</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>4757.30</td><td>185.08</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>4731.79</td><td>184.94</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>4726.40</td><td>184.59</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>4720.79</td><td>184.34</td></tr>
+<tr><td>tinyllama-1.1b-q4</td><td>636.18 MiB</td><td>1.10 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>4720.17</td><td>184.57</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td class="best-pp">3428.04</td><td>106.14</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>3237.39</td><td>106.43</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>3228.27</td><td>101.55</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>3225.97</td><td>105.95</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>3213.26</td><td>101.13</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>3203.39</td><td>101.25</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>3199.57</td><td>100.67</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>3193.19</td><td>100.64</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>3175.27</td><td>100.57</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>2620.22</td><td>118.38</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>2609.16</td><td>118.47</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>2606.02</td><td class="best-tg">118.72</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>2593.01</td><td>118.54</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>2580.14</td><td>118.16</td></tr>
+<tr><td>LFM2-2.6B</td><td>1.45 GiB</td><td>2.57 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>2554.20</td><td>118.59</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td class="best-pp">2141.66</td><td class="best-tg">60.28</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>2125.40</td><td>59.39</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>2114.53</td><td>60.27</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>2112.83</td><td>60.19</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>2107.62</td><td>59.60</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>2081.04</td><td>60.18</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td>1057.93</td><td>54.18</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>1008.53</td><td>54.29</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>1003.06</td><td>52.39</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>1002.85</td><td>52.32</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>1002.56</td><td>52.29</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>998.56</td><td>54.53</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>996.14</td><td>52.38</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>994.97</td><td>52.56</td></tr>
+<tr><td>llama3.2-3b-q8</td><td>3.18 GiB</td><td>3.21 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>992.68</td><td>52.25</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td class="best-pp">1421.37</td><td>34.55</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>1280.00</td><td>34.75</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>1272.16</td><td>33.74</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>1263.39</td><td>33.68</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>1256.41</td><td>34.72</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>1252.19</td><td>33.49</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>1250.34</td><td>33.57</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>1245.68</td><td>33.80</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>1245.38</td><td>33.79</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>1001.49</td><td>35.99</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>997.92</td><td>36.35</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>996.57</td><td>36.38</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>983.99</td><td class="best-tg">36.55</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>969.68</td><td>36.26</td></tr>
+<tr><td>qwen2.5-coder-7b-q6</td><td>5.82 GiB</td><td>7.62 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>925.70</td><td>36.40</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td class="best-pp">675.83</td><td>22.42</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>615.91</td><td>22.37</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>614.06</td><td>21.71</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>610.54</td><td>22.35</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>609.17</td><td>21.86</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>608.11</td><td>21.80</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>607.53</td><td>21.83</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>607.40</td><td>21.76</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>603.82</td><td>21.78</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>543.50</td><td>23.99</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>535.23</td><td>24.27</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>533.73</td><td class="best-tg">24.35</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>532.82</td><td>24.07</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>527.74</td><td>24.25</td></tr>
+<tr><td>Qwen2.5-14B-Instruct</td><td>8.37 GiB</td><td>14.77 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>523.25</td><td>23.95</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td class="best-pp">1168.20</td><td class="best-tg">81.53</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>1139.21</td><td>81.16</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>1126.14</td><td>81.33</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>1105.93</td><td>81.06</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>1058.48</td><td>80.79</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>1015.54</td><td>79.96</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td>537.28</td><td>73.41</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>521.57</td><td>73.33</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>520.70</td><td>73.45</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>520.35</td><td>69.42</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>519.64</td><td>69.57</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>518.01</td><td>69.11</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>515.21</td><td>69.42</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>509.81</td><td>68.14</td></tr>
+<tr><td class="moe">openai_gpt-oss-20b (MoE)</td><td>10.86 GiB</td><td>20.91 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>505.59</td><td>69.11</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td class="best-pp">863.28</td><td>70.65</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>861.42</td><td>70.64</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>860.89</td><td class="best-tg">70.71</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>859.53</td><td>70.50</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>858.79</td><td>70.64</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>855.10</td><td>70.57</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>807.11</td><td>47.73</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>807.01</td><td>47.69</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>804.78</td><td>47.69</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>804.73</td><td>47.68</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>804.58</td><td>47.78</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>801.99</td><td>47.76</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>799.82</td><td>50.43</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>796.97</td><td>50.16</td></tr>
+<tr><td class="moe">GLM-4.7-Flash (MoE)</td><td>16.88 GiB</td><td>29.94 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td>774.87</td><td>50.08</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td class="best-pp">1096.33</td><td>68.32</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>982.64</td><td class="best-tg">88.17</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>969.18</td><td>62.29</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>964.86</td><td>68.38</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>959.97</td><td>68.30</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>933.24</td><td>62.10</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>929.99</td><td>62.12</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>927.09</td><td>62.20</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>926.34</td><td>62.27</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>923.76</td><td>62.28</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>895.96</td><td>84.46</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>893.84</td><td>85.98</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>887.85</td><td>82.55</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>885.82</td><td>86.27</td></tr>
+<tr><td class="moe">Qwen3-30B-A3B (MoE)</td><td>17.28 GiB</td><td>30.53 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>882.20</td><td>84.13</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td class="best-pp">307.07</td><td>10.47</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>289.57</td><td>10.47</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>289.41</td><td>10.47</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>288.31</td><td>10.34</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>287.94</td><td>10.29</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>287.11</td><td>10.35</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>286.47</td><td>10.35</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>286.34</td><td>10.31</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>285.43</td><td>10.31</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>233.66</td><td class="best-tg">11.18</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>230.12</td><td>11.11</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>230.07</td><td>11.10</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>229.63</td><td>10.98</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>228.20</td><td>11.00</td></tr>
+<tr><td>Qwen2.5-32B-Instruct</td><td>18.48 GiB</td><td>32.76 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>228.15</td><td>11.11</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td class="best-pp">127.94</td><td>4.85</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>127.53</td><td>4.86</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>127.28</td><td>4.86</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>125.99</td><td>4.75</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>123.41</td><td>4.76</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>122.93</td><td>4.71</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>122.86</td><td>4.72</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>122.24</td><td>4.74</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>121.30</td><td>4.75</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>107.69</td><td class="best-tg">5.07</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>101.16</td><td>5.04</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>99.52</td><td>5.03</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>99.48</td><td>5.04</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>99.33</td><td>5.04</td></tr>
+<tr><td>Meta-Llama-3.1-70B</td><td>39.59 GiB</td><td>70.55 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>98.83</td><td>5.01</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td class="best-pp">615.37</td><td>39.49</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>579.26</td><td class="best-tg">43.98</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>577.79</td><td>43.75</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>532.50</td><td>39.59</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>528.70</td><td>39.66</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>525.85</td><td>39.50</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>524.64</td><td>43.75</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>347.89</td><td>30.63</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>347.55</td><td>30.87</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>346.74</td><td>30.82</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>344.01</td><td>30.83</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>343.63</td><td>30.81</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>342.22</td><td>39.81</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>340.45</td><td>30.85</td></tr>
+<tr><td class="moe">Qwen3-Next-80B-A3B (MoE)</td><td>45.08 GiB</td><td>79.67 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>339.38</td><td>39.74</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td class="best-pp">488.47</td><td class="best-tg">57.87</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>488.01</td><td>57.84</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>487.30</td><td>57.60</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-moe</td><td class="vulkan">Vulkan</td><td>479.71</td><td>57.61</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>446.55</td><td>54.29</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>443.45</td><td>52.57</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td>180.50</td><td>51.91</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>177.66</td><td>52.41</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>177.18</td><td>49.44</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>177.16</td><td>52.18</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>176.90</td><td>49.49</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>176.84</td><td>49.47</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>176.57</td><td>49.53</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>176.57</td><td>49.55</td></tr>
+<tr><td class="moe">openai_gpt-oss-120b (MoE)</td><td>58.51 GiB</td><td>116.83 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>172.86</td><td>49.41</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td class="best-pp">172.20</td><td>15.03</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>166.29</td><td>14.56</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>166.14</td><td>15.11</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>166.12</td><td>14.55</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>166.08</td><td>14.51</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>165.98</td><td>14.30</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>165.63</td><td>15.11</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>164.60</td><td>14.24</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>157.07</td><td>14.28</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>122.11</td><td class="best-tg">16.07</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>121.55</td><td>16.04</td></tr>
+<tr><td class="moe">Qwen3-235B-A22B (MoE)</td><td>104.72 GiB</td><td>235.09 B</td><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>121.50</td><td>15.88</td></tr>
+</table>
+
+<h2>Key Findings</h2>
+<ul>
+<li><strong>Vulkan dominates token generation (tg)</strong> across nearly all model sizes</li>
+<li><strong>ROCm hipblaslt-0 wins prompt processing (pp)</strong> for most dense models and smaller MoE</li>
+<li><strong>MoE models strongly favor Vulkan</strong> - up to 2.7x faster pp on 120B MoE (488 vs 180 t/s)</li>
+<li><strong>Dense 70B+ models favor ROCm for pp</strong> but Vulkan still wins tg</li>
+<li><strong>vulkan-radv-ub1024</strong> is consistently top performer for Vulkan</li>
+<li><strong>Q8 quantization hurts ROCm performance</strong> - llama3.2-3b-q8 is 2x slower on ROCm vs Vulkan</li>
+</ul>
+
+<h3>Images Tested</h3>
+<table>
+<tr><th>Image</th><th>Backend</th><th>Description</th></tr>
+<tr><td>llama-hipblaslt-0</td><td class="rocm">ROCm</td><td>HIP with hipBLASLt disabled</td></tr>
+<tr><td>llama-hipblaslt-1</td><td class="rocm">ROCm</td><td>HIP with hipBLASLt enabled</td></tr>
+<tr><td>llama-hip-rocm72-vram</td><td class="rocm">ROCm</td><td>ROCm 7.2 VRAM optimized</td></tr>
+<tr><td>llama-hip-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>ROCm 7.2 gfx1151 target</td></tr>
+<tr><td>llama-hip-rocm72-nofa-gfx1151</td><td class="rocm">ROCm</td><td>ROCm 7.2 no flash attention</td></tr>
+<tr><td>llama-hip-rocm72-fa0-gfx1151</td><td class="rocm">ROCm</td><td>ROCm 7.2 FA variant 0</td></tr>
+<tr><td>llama-hip-rocm72-mmap-gfx1151</td><td class="rocm">ROCm</td><td>ROCm 7.2 mmap enabled</td></tr>
+<tr><td>llama-hip-rocm72-sdma1-gfx1151</td><td class="rocm">ROCm</td><td>ROCm 7.2 SDMA enabled</td></tr>
+<tr><td>llama-hip-rocwmma-rocm72-gfx1151</td><td class="rocm">ROCm</td><td>ROCm 7.2 with rocWMMA</td></tr>
+<tr><td>llama-vulkan-radv-ub1024</td><td class="vulkan">Vulkan</td><td>RADV with UB=1024</td></tr>
+<tr><td>llama-vulkan-radv-fa-finegrain</td><td class="vulkan">Vulkan</td><td>RADV FA finegrain</td></tr>
+<tr><td>llama-vulkan-radv-fa</td><td class="vulkan">Vulkan</td><td>RADV flash attention</td></tr>
+<tr><td>llama-vulkan-radv</td><td class="vulkan">Vulkan</td><td>RADV default</td></tr>
+<tr><td>llama-vulkan</td><td class="vulkan">Vulkan</td><td>Vulkan default</td></tr>
+<tr><td>llama-moe</td><td class="vulkan">Vulkan</td><td>MoE optimized Vulkan</td></tr>
+</table>
+
+</body>
+</html>
