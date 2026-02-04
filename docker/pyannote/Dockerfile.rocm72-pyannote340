@@ -1,0 +1,273 @@
+# pyannote-audio 3.4.0 with ROCm 7.2 using AMD's official wheels
+# Testing if pyannote 3.4.0 fixes the lightning import error
+#
+# Usage:
+#   podman build --security-opt seccomp=unconfined --security-opt label=disable \
+#     -f docker/pyannote/Dockerfile.rocm72-pyannote340 \
+#     -t softab:pyannote-rocm72-340-gfx1151 .
+#
+#   podman run --rm --device=/dev/kfd --device=/dev/dri --ipc=host \
+#     --security-opt seccomp=unconfined --security-opt label=disable \
+#     -e HF_TOKEN=$HF_TOKEN \
+#     softab:pyannote-rocm72-340-gfx1151
+
+FROM docker.io/rocm/dev-ubuntu-24.04:7.2-complete
+
+LABEL maintainer="softab"
+LABEL description="pyannote-audio 3.4.0 with ROCm 7.2 (testing lightning fix)"
+LABEL backend="pytorch-rocm"
+LABEL rocm.version="7.2"
+LABEL pyannote.version="3.4.0"
+
+ARG GFX_TARGET=gfx1151
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Python 3.12, ffmpeg, and essentials
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-pip \
+    python3-dev \
+    python3-venv \
+    ffmpeg \
+    git \
+    wget \
+    bc jq htop \
+    && rm -rf /var/lib/apt/lists/*
+
+# ROCm environment
+ENV PATH="/opt/rocm/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/opt/rocm/lib:${LD_LIBRARY_PATH}"
+ENV ROCM_PATH="/opt/rocm"
+ENV HIP_PATH="/opt/rocm"
+ENV CMAKE_PREFIX_PATH="/opt/rocm"
+
+# Strix Halo settings - native gfx1151 in ROCm 7.2
+ENV HSA_ENABLE_SDMA=0
+ENV HIP_VISIBLE_DEVICES=0
+ENV GPU_TARGETS=${GFX_TARGET}
+ENV AMDGPU_TARGETS=${GFX_TARGET}
+ENV PYTORCH_ROCM_ARCH="gfx1151"
+ENV ROCBLAS_USE_HIPBLASLT=0
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+
+# Install AMD's official PyTorch ROCm 7.2 wheels
+# Using torch 2.7.1 for better compatibility
+RUN pip3 install --break-system-packages --no-cache-dir \
+    https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/triton-3.3.1+rocm7.2.0.git28a7371e-cp312-cp312-linux_x86_64.whl
+
+RUN pip3 install --break-system-packages --no-cache-dir \
+    https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/torch-2.7.1+rocm7.2.0.lw.git262e50d5-cp312-cp312-linux_x86_64.whl \
+    https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/torchaudio-2.7.1+rocm7.2.0.git95c61b41-cp312-cp312-linux_x86_64.whl
+
+# Pin numpy to compatible version
+RUN pip3 install --break-system-packages --no-cache-dir "numpy==1.26.4"
+
+# Install pyannote-audio 3.4.0 dependencies first
+RUN pip3 install --break-system-packages --no-cache-dir \
+    einops \
+    asteroid-filterbanks \
+    librosa \
+    soundfile \
+    scipy \
+    huggingface-hub \
+    omegaconf \
+    "pytorch-metric-learning>=2.0" \
+    semver \
+    typing-extensions \
+    pyannote.core \
+    pyannote.database \
+    pyannote.pipeline \
+    pyannote.metrics
+
+# Install lightning/pytorch-lightning (let pyannote pick compatible versions)
+RUN pip3 install --break-system-packages --no-cache-dir \
+    lightning \
+    pytorch-lightning \
+    rich \
+    safetensors \
+    torch-audiomentations \
+    speechbrain \
+    tensorboardX \
+    matplotlib
+
+# Install pyannote.audio 3.4.0 with --no-deps to prevent torch replacement
+RUN pip3 install --break-system-packages --no-cache-dir --no-deps \
+    "pyannote.audio==3.4.0"
+
+# Reinstall AMD ROCm wheels to override any CUDA versions that may have been pulled
+RUN pip3 install --break-system-packages --no-cache-dir --force-reinstall \
+    https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/triton-3.3.1+rocm7.2.0.git28a7371e-cp312-cp312-linux_x86_64.whl \
+    https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/torch-2.7.1+rocm7.2.0.lw.git262e50d5-cp312-cp312-linux_x86_64.whl \
+    https://repo.radeon.com/rocm/manylinux/rocm-rel-7.2/torchaudio-2.7.1+rocm7.2.0.git95c61b41-cp312-cp312-linux_x86_64.whl
+
+# Patch lightning_fabric to use weights_only=False
+# Required for pyannote-audio model loading with PyTorch 2.6+
+RUN find /usr -name "cloud_io.py" -path "*/lightning_fabric/*" -exec \
+    sed -i "s/return torch\.load(/return torch.load(weights_only=False, /g" {} \; 2>/dev/null || true
+
+WORKDIR /workspace
+
+# Create test script with monkeypatch for huggingface token compatibility
+COPY <<'EOF' /workspace/test_diarization.py
+#!/usr/bin/env python3
+"""Test script for pyannote-audio 3.4.0 on AMD ROCm 7.2"""
+import os
+import sys
+import torch
+
+def main():
+    print("=== pyannote-audio 3.4.0 + ROCm 7.2 Test ===")
+    print(f"Python: {sys.version}")
+    print(f"PyTorch: {torch.__version__}")
+    print(f"ROCm/HIP: {torch.version.hip if hasattr(torch.version, 'hip') else 'N/A'}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+
+    if torch.cuda.is_available():
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+        print(f"Device count: {torch.cuda.device_count()}")
+    else:
+        print("ERROR: GPU not available!")
+        return 1
+
+    # Try importing pyannote
+    try:
+        import pyannote.audio
+        print(f"pyannote.audio: {pyannote.audio.__version__}")
+    except ImportError as e:
+        print(f"ERROR importing pyannote.audio: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+    # Check lightning version
+    try:
+        import lightning
+        print(f"lightning: {lightning.__version__}")
+    except ImportError:
+        pass
+
+    # Check for HuggingFace token
+    hf_token = os.environ.get('HF_TOKEN')
+    if not hf_token:
+        print("\nIMPORT TEST PASSED (no HF_TOKEN, skipping pipeline)")
+        return 0
+
+    # Monkeypatch for use_auth_token -> token compatibility
+    import huggingface_hub
+    _original_hf_hub_download = huggingface_hub.hf_hub_download
+    def _patched_hf_hub_download(*args, **kwargs):
+        if 'use_auth_token' in kwargs:
+            kwargs['token'] = kwargs.pop('use_auth_token')
+        return _original_hf_hub_download(*args, **kwargs)
+    huggingface_hub.hf_hub_download = _patched_hf_hub_download
+
+    _original_snapshot_download = huggingface_hub.snapshot_download
+    def _patched_snapshot_download(*args, **kwargs):
+        if 'use_auth_token' in kwargs:
+            kwargs['token'] = kwargs.pop('use_auth_token')
+        return _original_snapshot_download(*args, **kwargs)
+    huggingface_hub.snapshot_download = _patched_snapshot_download
+
+    # Try loading pipeline
+    try:
+        from pyannote.audio import Pipeline
+        print("\nLoading speaker-diarization-3.1 pipeline...")
+        pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+        print("Pipeline loaded successfully!")
+
+        print("Moving pipeline to GPU...")
+        pipeline.to(torch.device("cuda"))
+        print("Pipeline on GPU!")
+
+        print("\n✅ SUCCESS: pyannote-audio 3.4.0 working on ROCm 7.2!")
+        return 0
+
+    except Exception as e:
+        print(f"\nERROR loading pipeline: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
+EOF
+
+# Create benchmark script
+COPY <<'EOF' /workspace/bench_diarization.py
+#!/usr/bin/env python3
+"""Benchmark pyannote-audio on ROCm 7.2"""
+import os
+import sys
+import time
+import torch
+
+# Monkeypatch huggingface_hub
+import huggingface_hub
+_original_hf_hub_download = huggingface_hub.hf_hub_download
+def _patched_hf_hub_download(*args, **kwargs):
+    if 'use_auth_token' in kwargs:
+        kwargs['token'] = kwargs.pop('use_auth_token')
+    return _original_hf_hub_download(*args, **kwargs)
+huggingface_hub.hf_hub_download = _patched_hf_hub_download
+
+_original_snapshot_download = huggingface_hub.snapshot_download
+def _patched_snapshot_download(*args, **kwargs):
+    if 'use_auth_token' in kwargs:
+        kwargs['token'] = kwargs.pop('use_auth_token')
+    return _original_snapshot_download(*args, **kwargs)
+huggingface_hub.snapshot_download = _patched_snapshot_download
+
+from pyannote.audio import Pipeline
+
+def main():
+    audio_file = sys.argv[1] if len(sys.argv) > 1 else None
+
+    if not audio_file or not os.path.exists(audio_file):
+        print("Usage: python bench_diarization.py <audio_file>")
+        return 1
+
+    hf_token = os.environ.get('HF_TOKEN')
+    if not hf_token:
+        print("ERROR: HF_TOKEN required")
+        return 1
+
+    print(f"=== pyannote-audio 3.4.0 + ROCm 7.2 Benchmark ===")
+    print(f"PyTorch: {torch.__version__}")
+    print(f"Audio: {audio_file}")
+    print(f"Device: {'GPU' if torch.cuda.is_available() else 'CPU'}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+
+    print("\nLoading pipeline...")
+    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+
+    if torch.cuda.is_available():
+        pipeline.to(torch.device("cuda"))
+
+    print("Running diarization...")
+    start = time.time()
+    diarization = pipeline(audio_file)
+    elapsed = time.time() - start
+
+    print(f"\n=== Results ===")
+    print(f"Processing time: {elapsed:.2f}s")
+    print(f"\nSpeaker segments:")
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        print(f"  [{turn.start:.1f}s - {turn.end:.1f}s] {speaker}")
+
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
+EOF
+
+RUN chmod +x /workspace/test_diarization.py /workspace/bench_diarization.py
+
+LABEL gfx.target="${GFX_TARGET}"
+LABEL ablation.type="pyannote-audio"
+LABEL ablation.backend="pytorch-rocm72-pyannote340"
+
+CMD ["python3", "test_diarization.py"]

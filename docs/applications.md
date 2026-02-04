@@ -104,11 +104,11 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 pip install pyannote.audio
 ```
 
-**ROCm Compatibility**:
-- **ROCm 6.1+**: Officially tested by AMD
-- **ROCm 6.4.4**: Stable (may need `HSA_OVERRIDE_GFX_VERSION=11.0.0`)
-- **ROCm 7.2**: Native gfx1151 support (recommended)
-- **scottt/TheRock wheels**: Self-contained PyTorch 2.7 with native gfx1151
+**ROCm Compatibility** (tested on Strix Halo):
+- **ROCm 6.2**: ✅ **Working** (~4x realtime, uses gfx1100 fallback)
+- **ROCm 6.4.4**: ❌ Import errors (lightning/pyannote version mismatch)
+- **ROCm 7.x / TheRock**: ❌ Import errors (`is_oom_error` not found)
+- **Recommendation**: Use ROCm 6.2 containers for pyannote
 
 **Available Models**:
 
@@ -152,6 +152,38 @@ for turn, _, speaker in diarization.itertracks(yield_label=True):
 **Critical Runtime Flags** (when using containers):
 - `--ipc=host` - Required for ROCm on Strix Halo (unified memory)
 - `--device=/dev/kfd --device=/dev/dri` - GPU access
+
+### SoftAb Audio Pipeline (VAD + Whisper + Pyannote)
+
+**Status**: ✅ Working single-container solution
+
+Combined pipeline for speech processing:
+1. **Silero VAD** - Voice activity detection (CPU)
+2. **Whisper.cpp Vulkan** - Speech-to-text (~19x realtime)
+3. **Pyannote** - Speaker diarization (~1.1x realtime)
+
+**Why this combination?**
+- Whisper ROCm 7.2 is fastest, but pyannote only works on ROCm 6.2
+- Vulkan whisper.cpp works in ROCm 6.2 container (avoids conflicts)
+- Single container simplifies deployment
+
+**Usage**:
+```bash
+podman run --rm \
+  --device=/dev/kfd --device=/dev/dri \
+  --ipc=host \
+  --security-opt seccomp=unconfined \
+  --security-opt label=disable \
+  -e HF_TOKEN="$HF_TOKEN" \
+  -v /data/models:/models:ro \
+  softab:audio-pipeline /models/audio.wav -m /models/ggml-base.en.bin
+```
+
+**Performance** (11s audio):
+- Total pipeline: ~12s (0.9x realtime)
+- Pyannote is the bottleneck
+
+See [Audio Pipeline Benchmarks](../docker/audio-pipeline/BENCHMARKS.md) for details.
 
 ## Turnkey Solutions
 

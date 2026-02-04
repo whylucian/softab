@@ -1,6 +1,6 @@
 # AMD Strix Halo (gfx1151) AI Software Stack - Knowledge Base
 
-> **Last Updated**: January 2026
+> **Last Updated**: February 2026
 > **Primary Sources**: [lhl/strix-halo-testing](https://github.com/lhl/strix-halo-testing), [Strix Halo Wiki](https://strixhalo.wiki/AI/AI_Capabilities_Overview), [llm-tracker.info](https://llm-tracker.info/_TOORG/Strix-Halo)
 
 ---
@@ -35,6 +35,8 @@ AMD Strix Halo (Ryzen AI Max+ 395) offers **128GB unified memory** enabling 70B+
 - **Kernel 6.15+ required**, 6.16.9+ fixes VRAM visibility bugs
 - **⚠️ Current kernel 6.18.6** - Standard ROCm broken, MUST use TheRock nightlies
 - Full official ROCm support expected **Q2 2026 with ROCm 7.2.2**
+- **~~gfx1100 faster than gfx1151~~** - OUTDATED! Native gfx1151 (TheRock 7.11) is now **2x faster for transformers**
+- **Disable hipBLASLt** (`ROCBLAS_USE_HIPBLASLT=0`) for +20% PyTorch performance
 
 ## Quick Reference
 
@@ -43,7 +45,7 @@ AMD Strix Halo (Ryzen AI Max+ 395) offers **128GB unified memory** enabling 70B+
 | **Best backend?** | Vulkan RADV for general use; ROCm for long context | [ROCm Support](docs/rocm-support.md) |
 | **Best distro?** | Fedora 43 | [Applications](docs/applications.md#linux-distribution-recommendations) |
 | **Kernel version?** | 6.18.3-200 (avoid 6.18.4+) | [Troubleshooting](docs/troubleshooting.md#kernel-6184-vs-6183-compatibility) |
-| **ROCm version?** | 6.4.4 (stable) or TheRock nightlies | [ROCm Support](docs/rocm-support.md#official-support-timeline) |
+| **ROCm version?** | TheRock 7.11 (best), 7.2.0 (official), or 6.4.4 (stable fallback) | [ROCm Support](docs/rocm-support.md#official-support-timeline) |
 | **Required flags?** | `--no-mmap -ngl 999 -fa 1` for llama.cpp | [Troubleshooting](docs/troubleshooting.md#llamacpp-specific-optimizations) |
 | **GPU not detected?** | Check kernel 6.16.9+, firmware not 20251125 | [Troubleshooting](docs/troubleshooting.md#vram-visibility-bug) |
 | **Turnkey solution?** | kyuz0 toolboxes for llama.cpp | [Applications](docs/applications.md#kyuz0-strix-halo-toolboxes-recommended) |
@@ -138,6 +140,10 @@ echo high | sudo tee /sys/class/drm/card0/device/power_dpm_force_performance_lev
 - **Project Overview**: [README.md](README.md)
 - **Experiment Methodology**: [experiments/README.md](experiments/README.md)
 - **Quick Reference**: [QUICK_REFERENCE.md](QUICK_REFERENCE.md)
+- **PyTorch Benchmarks**: [docker/pytorch/BENCHMARKS.md](docker/pytorch/BENCHMARKS.md) - Image compatibility, NN throughput, environment variables
+- **Whisper Benchmarks**: [docker/whisper-cpp/BENCHMARKS.md](docker/whisper-cpp/BENCHMARKS.md) - Transcription speed, backend comparison, SDMA findings
+- **Pyannote Benchmarks**: [docker/pyannote/BENCHMARKS.md](docker/pyannote/BENCHMARKS.md) - Speaker diarization, ROCm 6.2 compatibility
+- **Audio Pipeline**: [docker/audio-pipeline/BENCHMARKS.md](docker/audio-pipeline/BENCHMARKS.md) - VAD + Whisper + Pyannote combined pipeline
 
 ## Contributing
 
@@ -153,5 +159,5 @@ Knowledge base content is MIT licensed. Community contributions acknowledged.
 
 ---
 
-**Last major update**: 2026-01-26 (Split into topic-specific documentation)
+**Last major update**: 2026-02-02 (Added ROCm 7.2 info, PyTorch NN benchmark data, hipBLASLt findings)
 **Software stack status**: Rapidly evolving - verify current status before major decisions

@@ -29,8 +29,8 @@ RUN dnf -y update && dnf -y install \
 ENV AMD_VULKAN_ICD=RADV
 ENV GGML_VK_PREFER_HOST_MEMORY=ON
 
-# Clone and build llama.cpp
-RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+# Clone and build llama.cpp (pinned to b7923 - fixes Vulkan garbage output bugs)
+RUN git clone --branch b7923 --depth 1 https://github.com/ggml-org/llama.cpp /llama.cpp
 
 WORKDIR /llama.cpp
 

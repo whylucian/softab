@@ -1,5 +1,8 @@
-# llama.cpp HIP with gfx1100 override (potentially 2x faster, but risky)
-# From Reddit: "gfx1100 kernels can be up to 2X faster than gfx1151 kernels"
+# llama.cpp HIP with gfx1100 override
+# OUTDATED: The "gfx1100 is 2x faster" claim is NO LONGER TRUE as of TheRock 7.11
+# SoftAb benchmarks (2026-02-02) show native gfx1151 is now 2x FASTER for transformers
+# This Dockerfile kept for historical comparison only
+#
 # WARNING: May cause occasional system hangs requiring reboot
 #
 # Build: podman build -t softab:llama-gfx1100-override -f Dockerfile.hip-gfx1100-override .
@@ -8,12 +11,12 @@
 FROM docker.io/rocm/dev-ubuntu-24.04:7.2-complete
 
 LABEL maintainer="softab"
-LABEL description="llama.cpp HIP with gfx1100 override (2x faster but risky)"
+LABEL description="llama.cpp HIP with gfx1100 override (OUTDATED - native gfx1151 now faster)"
 LABEL ablation.type="llama-cpp"
 LABEL ablation.variable="HSA_OVERRIDE_GFX_VERSION"
 LABEL ablation.value="11.0.0"
 LABEL ablation.warning="May cause system hangs - save work before testing"
-LABEL ablation.note="Tests claim from Reddit that gfx1100 kernels are 2x faster"
+LABEL ablation.note="OUTDATED: gfx1100 override no longer faster than native gfx1151 (TheRock 7.11)"
 
 # Build for gfx1100 to use those kernels
 ARG GFX_TARGET=gfx1100

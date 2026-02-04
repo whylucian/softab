@@ -63,13 +63,13 @@ podman run --device /dev/kfd --device /dev/dri -v ~/models:/models \
 
 ---
 
-### 4. gfx1100 Override (RISKY)
+### 4. gfx1100 Override (OUTDATED - NOT RECOMMENDED)
 **Dockerfile:** `Dockerfile.hip-gfx1100-override`
-**Purpose:** Test "2x faster" claim using gfx1100 kernels on gfx1151 hardware
+**Purpose:** ~~Test "2x faster" claim~~ **OUTDATED** - native gfx1151 is now faster
 
 **WARNING:** May cause system hangs requiring reboot!
 
-Reddit claims gfx1100 kernels can be up to 2x faster than gfx1151 kernels. This is tracked in [ROCm/ROCm#4748](https://github.com/ROCm/ROCm/issues/4748).
+> ⚠️ **UPDATE (2026-02-02):** The claim that "gfx1100 kernels are 2x faster" is **no longer true**. SoftAb benchmarks show TheRock 7.11 with native gfx1151 is actually **2x faster for transformer models** (ViT, BERT). CNNs perform the same. The old claim (tracked in [ROCm/ROCm#4748](https://github.com/ROCm/ROCm/issues/4748)) was true for early unoptimized gfx1151 kernels but has been fixed.
 
 ```bash
 # Build

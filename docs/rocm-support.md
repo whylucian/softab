@@ -10,7 +10,9 @@
 | ROCm 6.5.0rc | ⚠️ Community | scottt's self-contained wheels (no system ROCm needed) |
 | ROCm 7.0.x | ⚠️ Regressions | Some models slower than 6.4.4 |
 | ROCm 7.1.1 | ⚠️ Batch norm bug | [ROCm#5339](https://github.com/ROCm/ROCm/issues/5339) reported issues |
+| ROCm 7.2.0 | ✅ Released | Counter collection for gfx1150/gfx1151; rocWMMA gfx1150 support; JAX 0.8.0 |
 | ROCm 7.2.2 | 🔜 Q2 2026 | Full official support with AMD's "Ryzen AI Halo" dev kit |
+| TheRock 7.11 | ✅ Nightlies | **Best native gfx1151 support**; 2x faster transformers vs gfx1100 fallback |
 
 **AMD Official Statement** ([ROCm#5339](https://github.com/ROCm/ROCm/issues/5339)):
 > "The 6.4.4 PyTorch releases are stepping stones to getting full support with ROCm 7.x + Strix Halo."
@@ -67,13 +69,16 @@ One HIP_VERSION change is required - see: https://www.reddit.com/r/LocalLLaMA/co
 # REQUIRED for stability
 export HSA_ENABLE_SDMA=0                    # Fix checkerboard artifacts
 
-# For PyTorch
+# For PyTorch (IMPORTANT: disable hipBLASLt for better performance!)
 export PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+export ROCBLAS_USE_HIPBLASLT=0              # +20% GEMM performance on Strix Halo
 export TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1
 
-# For llama.cpp with hipBLASLt (often faster)
-export ROCBLAS_USE_HIPBLASLT=1
+# For llama.cpp (hipBLASLt may help or hurt - benchmark your model)
+# export ROCBLAS_USE_HIPBLASLT=1            # Test both 0 and 1
 ```
+
+> ⚠️ **SoftAb finding**: `ROCBLAS_USE_HIPBLASLT=0` improves PyTorch GEMM by ~20% on Strix Halo (32.7 vs 27.2 TFLOPS). This contradicts some older guidance recommending hipBLASLt=1.
 
 ## Backend Performance Comparison
 
@@ -141,10 +146,29 @@ pip install "https://github.com/scottt/rocm-TheRock/releases/download/v6.5.0rc-p
 | Source | Version | Native gfx1151? | hipBLASLt | Peak TFLOPS | Notes |
 |--------|---------|-----------------|-----------|-------------|-------|
 | PyPI rocm6.2 | 2.5.1+rocm6.2 | ❌ Fails | N/A | 0 | "invalid device function" |
-| PyPI rocm6.2 + HSA_OVERRIDE | 2.5.1+rocm6.2 | ⚠️ Hack | Disabled | 30.9 (52%) | Works but unstable long-term |
-| TheRock + hipBLASLt | (web source) | ✅ Native | Enabled | 36.9 (62%) | Target configuration |
+| PyPI rocm6.2 + HSA_OVERRIDE | 2.5.1+rocm6.2 | ⚠️ gfx1100 fallback | Disabled | 25.6 (43%) | Works but suboptimal |
+| TheRock 7.11 | 2.11.0a0 | ✅ Native gfx1151 | **Disabled** | **32.7 (55%)** | Best config - disable hipBLASLt! |
+| TheRock 7.11 + hipBLASLt | 2.11.0a0 | ✅ Native gfx1151 | Enabled | 27.2 (46%) | hipBLASLt hurts performance |
 
-**Key Finding**: Official PyTorch wheels from `download.pytorch.org/whl/rocm6.2` do NOT include gfx1151 kernels. They detect the GPU but fail at runtime.
+**Key Findings** (SoftAb benchmark 2026-02-02):
+- Official PyTorch wheels from `download.pytorch.org/whl/rocm6.2` do NOT include gfx1151 kernels
+- **hipBLASLt hurts performance on Strix Halo** - disable with `ROCBLAS_USE_HIPBLASLT=0`
+- TheRock 7.11 with native gfx1151 is 20% faster on GEMM vs gfx1100 fallback
+- **Transformer models (ViT, BERT) are 2x faster** on native gfx1151 vs gfx1100 fallback
+
+### Neural Network Throughput (batch=32, FP16)
+
+| Model | TheRock gfx1151 | ROCm 6.2 gfx1100 | Speedup |
+|-------|-----------------|------------------|---------|
+| ResNet-18 | 4697 img/s | 4665 img/s | 1.0x |
+| ResNet-50 | 1083 img/s | 1085 img/s | 1.0x |
+| **ViT-B/16** | **725 img/s** | 317 img/s | **2.3x** |
+| **BERT-base (seq=128)** | **1193 seq/s** | 709 seq/s | **1.7x** |
+| **BERT-base (seq=512)** | **271 seq/s** | 125 seq/s | **2.2x** |
+
+**Key Insight**: CNNs perform similarly, but **attention-based models are 2x faster on native gfx1151**.
+
+> 📊 **Full benchmark data**: See [docker/pytorch/BENCHMARKS.md](../docker/pytorch/BENCHMARKS.md) for complete results, image compatibility matrix, and recommended configurations.
 
 ### HSA_OVERRIDE Workaround
 
@@ -163,7 +187,7 @@ export HSA_ENABLE_SDMA=0
 
 1. **Official wheels lack gfx1151** - Use TheRock nightlies or build from source
 2. **Flash Attention fails** with "not compiled for gfx1151" - requires AOTriton custom build
-3. **Native gfx1151 kernels 2-6x slower** than gfx1100 (tracked: ROCm/ROCm#4748)
+3. ~~**Native gfx1151 kernels 2-6x slower** than gfx1100~~ **OUTDATED** - TheRock 7.11 gfx1151 is now **2x faster** for transformers (see benchmarks above)
 4. **90-95% time in hipMemcpyWithStream** for LLM decode (tracked: pytorch/pytorch#171687)
 5. **HSA_OVERRIDE causes eventual MES errors** - Not recommended for production
 

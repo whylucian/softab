@@ -1,0 +1,375 @@
+# Optimized Audio Pipeline: VAD + Whisper + Pyannote
+# Single container with ROCm 6.2 (pyannote) + Vulkan whisper.cpp
+#
+# Build: podman build -t softab:audio-pipeline -f Dockerfile.rocm62-vulkan .
+# Run:   podman run --device /dev/kfd --device /dev/dri --ipc=host \
+#          --security-opt seccomp=unconfined --security-opt label=disable \
+#          -e HF_TOKEN=$HF_TOKEN -v /data/models:/models \
+#          softab:audio-pipeline /models/audio.wav
+
+# Use our working pyannote image as base (has ROCm 6.2 + pyannote already)
+FROM localhost/softab:pyannote-rocm62-gfx1151
+
+LABEL maintainer="softab"
+LABEL description="Optimized audio pipeline: Silero VAD + Whisper.cpp Vulkan + Pyannote"
+LABEL ablation.type="audio-pipeline"
+LABEL ablation.components="silero-vad,whisper-vulkan,pyannote-rocm62"
+
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Required for Strix Halo stability
+ENV HSA_ENABLE_SDMA=0
+ENV PYTORCH_HIP_ALLOC_CONF="backend:native,expandable_segments:True"
+
+# Vulkan driver selection (RADV for stability)
+ENV AMD_VULKAN_ICD=RADV
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git wget curl \
+    # Vulkan for whisper.cpp
+    libvulkan-dev vulkan-tools mesa-vulkan-drivers \
+    glslang-tools glslc \
+    # Audio processing
+    ffmpeg libsndfile1 \
+    # Python
+    python3-pip python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install additional Python dependencies (pyannote already installed in base)
+RUN pip3 install --no-cache-dir --break-system-packages \
+    silero-vad \
+    soundfile \
+    pandas
+
+# Build whisper.cpp with Vulkan backend
+WORKDIR /opt
+RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git && \
+    cd whisper.cpp && \
+    cmake -B build \
+        -DGGML_VULKAN=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=ON && \
+    cmake --build build -j$(nproc) && \
+    # Install binaries
+    cp build/bin/whisper-cli /usr/local/bin/ && \
+    cp build/bin/whisper-bench /usr/local/bin/ && \
+    # Install all shared libraries (recursively find them)
+    find build -name "*.so*" -exec cp {} /usr/local/lib/ \; && \
+    ldconfig && \
+    rm -rf /opt/whisper.cpp
+
+# Create pipeline script
+COPY <<'PIPELINE_SCRIPT' /usr/local/bin/audio-pipeline
+#!/usr/bin/env python3
+"""
+Optimized Audio Pipeline: VAD → Whisper → Pyannote
+Runs all three stages on GPU (where applicable) in a single container.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+import torch
+import soundfile as sf
+
+
+def run_vad(audio_path, output_dir):
+    """Run Silero VAD to detect speech segments."""
+    print("=== Stage 1: Voice Activity Detection (Silero) ===")
+    t0 = time.time()
+
+    # Load Silero VAD
+    model, utils = torch.hub.load(
+        repo_or_dir='snakers4/silero-vad',
+        model='silero_vad',
+        force_reload=False,
+        trust_repo=True
+    )
+    (get_speech_timestamps, _, read_audio, _, _) = utils
+
+    # Read audio
+    wav = read_audio(audio_path, sampling_rate=16000)
+
+    # Get speech timestamps
+    speech_timestamps = get_speech_timestamps(wav, model, sampling_rate=16000)
+
+    elapsed = time.time() - t0
+    total_speech = sum((ts['end'] - ts['start']) / 16000 for ts in speech_timestamps)
+
+    print(f"  Time: {elapsed:.2f}s")
+    print(f"  Speech segments: {len(speech_timestamps)}")
+    print(f"  Total speech: {total_speech:.1f}s")
+
+    return speech_timestamps, elapsed
+
+
+def run_whisper(audio_path, model_path, output_dir):
+    """Run whisper.cpp Vulkan for transcription with JSON output."""
+    print("\n=== Stage 2: Transcription (Whisper.cpp Vulkan) ===")
+    t0 = time.time()
+
+    output_base = Path(output_dir) / "whisper_output"
+    output_json = output_base.with_suffix(".json")
+
+    cmd = [
+        "whisper-cli",
+        "-m", model_path,
+        "-f", audio_path,
+        "-of", str(output_base),
+        "-oj",  # JSON output with timestamps
+        "-l", "en",
+        "--max-len", "1",  # Segment at sentence boundaries for better speaker assignment
+        "--print-progress", "false"
+    ]
+
+    print(f"  Model: {model_path}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    elapsed = time.time() - t0
+
+    # Check for errors
+    if result.returncode != 0:
+        print(f"  Error: whisper-cli returned {result.returncode}")
+        if result.stderr:
+            for line in result.stderr.split('\n')[:10]:
+                if line.strip():
+                    print(f"    {line.strip()}")
+
+    # Parse output for timing
+    for line in result.stderr.split('\n'):
+        if 'total time' in line:
+            print(f"  Whisper internal: {line.strip()}")
+
+    # Read JSON output with segments
+    whisper_segments = []
+    transcript = ""
+
+    if output_json.exists():
+        with open(output_json) as f:
+            whisper_data = json.load(f)
+        # Extract segments from whisper JSON
+        for item in whisper_data.get('transcription', []):
+            ts = item.get('timestamps', {})
+            text = item.get('text', '').strip()
+            if text:
+                # Parse timestamps like "00:00:00,000"
+                def parse_ts(ts_str):
+                    parts = ts_str.replace(',', ':').split(':')
+                    return int(parts[0])*3600 + int(parts[1])*60 + int(parts[2]) + int(parts[3])/1000
+                whisper_segments.append({
+                    'start': parse_ts(ts.get('from', '00:00:00,000')),
+                    'end': parse_ts(ts.get('to', '00:00:00,000')),
+                    'text': text
+                })
+        transcript = ' '.join(s['text'] for s in whisper_segments)
+    else:
+        print(f"  Warning: No JSON output at {output_json}")
+        # Fallback: try txt output
+        output_txt = output_base.with_suffix(".txt")
+        if output_txt.exists():
+            with open(output_txt) as f:
+                transcript = f.read().strip()
+
+    print(f"  Total time: {elapsed:.2f}s")
+    print(f"  Segments: {len(whisper_segments)}")
+    print(f"  Transcript: {transcript[:100]}..." if len(transcript) > 100 else f"  Transcript: {transcript}")
+
+    return whisper_segments, transcript, elapsed
+
+
+def run_pyannote(audio_path, output_dir):
+    """Run pyannote speaker diarization on GPU."""
+    print("\n=== Stage 3: Speaker Diarization (Pyannote) ===")
+    t0 = time.time()
+
+    # Monkeypatch for token compatibility
+    import huggingface_hub
+    _orig = huggingface_hub.hf_hub_download
+    def _patched(*args, **kwargs):
+        if 'use_auth_token' in kwargs:
+            kwargs['token'] = kwargs.pop('use_auth_token')
+        return _orig(*args, **kwargs)
+    huggingface_hub.hf_hub_download = _patched
+
+    _orig2 = huggingface_hub.snapshot_download
+    def _patched2(*args, **kwargs):
+        if 'use_auth_token' in kwargs:
+            kwargs['token'] = kwargs.pop('use_auth_token')
+        return _orig2(*args, **kwargs)
+    huggingface_hub.snapshot_download = _patched2
+
+    from pyannote.audio import Pipeline
+
+    print("  Loading pipeline...")
+    pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1")
+    pipeline.to(torch.device("cuda"))
+
+    print("  Running diarization...")
+    diarization = pipeline(audio_path)
+
+    elapsed = time.time() - t0
+
+    # Extract speaker segments
+    segments = []
+    for turn, _, speaker in diarization.itertracks(yield_label=True):
+        segments.append({
+            "start": turn.start,
+            "end": turn.end,
+            "speaker": speaker
+        })
+
+    print(f"  Time: {elapsed:.2f}s")
+    print(f"  Speakers: {len(set(s['speaker'] for s in segments))}")
+    print(f"  Segments: {len(segments)}")
+
+    return segments, elapsed
+
+
+def merge_results(whisper_segments, transcript, diarization_segments, audio_duration):
+    """Merge transcription segments with speaker labels."""
+
+    def get_speaker_at_time(t):
+        """Find speaker at time t based on diarization."""
+        for seg in diarization_segments:
+            if seg["start"] <= t <= seg["end"]:
+                return seg["speaker"]
+        # Find nearest speaker within 0.5s
+        min_dist = float('inf')
+        nearest = None
+        for seg in diarization_segments:
+            dist = min(abs(t - seg["start"]), abs(t - seg["end"]))
+            if dist < min_dist and dist < 0.5:
+                min_dist = dist
+                nearest = seg["speaker"]
+        return nearest or (diarization_segments[0]["speaker"] if diarization_segments else "SPEAKER_00")
+
+    # Assign speakers to each whisper segment
+    merged_segments = []
+    for seg in whisper_segments:
+        mid_time = (seg["start"] + seg["end"]) / 2
+        speaker = get_speaker_at_time(mid_time)
+        merged_segments.append({
+            "start": round(seg["start"], 3),
+            "end": round(seg["end"], 3),
+            "text": seg["text"],
+            "speaker": speaker
+        })
+
+    result = {
+        "transcript": transcript,
+        "speakers": list(set(s["speaker"] for s in diarization_segments)) if diarization_segments else [],
+        "segments": merged_segments,
+        "audio_duration": audio_duration
+    }
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Audio Pipeline: VAD + Whisper + Pyannote")
+    parser.add_argument("audio", help="Path to audio file")
+    parser.add_argument("-m", "--model", default="/models/ggml-large-v3.bin",
+                        help="Whisper model path")
+    parser.add_argument("-o", "--output", help="Output JSON file")
+    parser.add_argument("--skip-vad", action="store_true", help="Skip VAD stage")
+    parser.add_argument("--skip-whisper", action="store_true", help="Skip Whisper stage")
+    parser.add_argument("--skip-pyannote", action="store_true", help="Skip Pyannote stage")
+    args = parser.parse_args()
+
+    if not os.path.exists(args.audio):
+        print(f"Error: Audio file not found: {args.audio}")
+        sys.exit(1)
+
+    # Check HF_TOKEN for pyannote
+    if not args.skip_pyannote and not os.environ.get("HF_TOKEN"):
+        print("Warning: HF_TOKEN not set, pyannote may fail")
+
+    # Get audio duration
+    audio_info = sf.info(args.audio)
+    audio_duration = audio_info.duration
+    print(f"Audio: {args.audio}")
+    print(f"Duration: {audio_duration:.1f}s")
+    print(f"Sample rate: {audio_info.samplerate}")
+    print("")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        times = {}
+
+        # Stage 1: VAD
+        if not args.skip_vad:
+            vad_segments, times['vad'] = run_vad(args.audio, tmpdir)
+        else:
+            vad_segments = None
+            times['vad'] = 0
+
+        # Stage 2: Whisper
+        if not args.skip_whisper:
+            whisper_segments, transcript, times['whisper'] = run_whisper(args.audio, args.model, tmpdir)
+        else:
+            whisper_segments = []
+            transcript = ""
+            times['whisper'] = 0
+
+        # Stage 3: Pyannote
+        if not args.skip_pyannote:
+            diarization, times['pyannote'] = run_pyannote(args.audio, tmpdir)
+        else:
+            diarization = []
+            times['pyannote'] = 0
+
+        # Merge results
+        result = merge_results(whisper_segments, transcript, diarization, audio_duration)
+        result['timings'] = times
+        result['total_time'] = sum(times.values())
+        result['realtime_factor'] = audio_duration / result['total_time'] if result['total_time'] > 0 else 0
+
+        # Summary
+        print("\n" + "=" * 50)
+        print("SUMMARY")
+        print("=" * 50)
+        print(f"Audio duration: {audio_duration:.1f}s")
+        print(f"VAD time:       {times['vad']:.2f}s")
+        print(f"Whisper time:   {times['whisper']:.2f}s")
+        print(f"Pyannote time:  {times['pyannote']:.2f}s")
+        print(f"Total time:     {result['total_time']:.2f}s")
+        print(f"Realtime:       {result['realtime_factor']:.1f}x")
+
+        # Output
+        if args.output:
+            with open(args.output, 'w') as f:
+                json.dump(result, f, indent=2)
+            print(f"\nResults saved to: {args.output}")
+        else:
+            print("\nDiarization segments:")
+            for seg in diarization[:5]:
+                print(f"  [{seg['start']:.1f}s - {seg['end']:.1f}s] {seg['speaker']}")
+            if len(diarization) > 5:
+                print(f"  ... and {len(diarization) - 5} more segments")
+
+
+if __name__ == "__main__":
+    main()
+PIPELINE_SCRIPT
+RUN chmod +x /usr/local/bin/audio-pipeline
+
+# Simple wrapper for quick testing
+COPY <<'QUICK_TEST' /usr/local/bin/quick-test
+#!/bin/bash
+echo "=== Quick Pipeline Test ==="
+echo "Audio: $1"
+echo "Model: ${2:-/models/ggml-base.en.bin}"
+audio-pipeline "$1" -m "${2:-/models/ggml-base.en.bin}"
+QUICK_TEST
+RUN chmod +x /usr/local/bin/quick-test
+
+WORKDIR /workspace
+
+# Default entrypoint
+ENTRYPOINT ["audio-pipeline"]
+CMD ["--help"]

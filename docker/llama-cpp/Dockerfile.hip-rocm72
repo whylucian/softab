@@ -35,8 +35,8 @@ ENV HIP_VISIBLE_DEVICES=0
 ENV GPU_TARGETS=${GFX_TARGET}
 ENV AMDGPU_TARGETS=${GFX_TARGET}
 
-# Clone llama.cpp
-RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /llama.cpp
+# Clone llama.cpp (pinned to b7923 - fixes MoE and garbage output bugs)
+RUN git clone --branch b7923 --depth 1 https://github.com/ggml-org/llama.cpp /llama.cpp
 
 WORKDIR /llama.cpp
 
